@@ -1,0 +1,57 @@
+/* The remote page scrolls; the main app's body doesn't, so it gets its own fixed scroll area. */
+.remote {
+  position: fixed; inset: 0; overflow-y: auto; overscroll-behavior: contain; background: var(--bg);
+  padding: max(12px, env(safe-area-inset-top)) 16px max(32px, env(safe-area-inset-bottom));
+  -webkit-user-select: none; user-select: none; touch-action: manipulation;
+}
+.remote header h1 { font-size: 21px; font-weight: 600; margin: 4px 0; }
+.remote h2 { font-size: 13px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; margin: 22px 0 8px; }
+.rstate { display: flex; align-items: center; gap: 8px; margin: 0 0 6px; font-size: 13.5px; }
+.rstate i { width: 9px; height: 9px; border-radius: 50%; background: var(--warn); flex: none; }
+.rstate.ok i { background: #4ade80; }
+.rnote { margin: 0 0 6px; font-size: 12.5px; color: var(--warn); }
+
+.rtop { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 12px; }
+.remote button.big { min-height: 64px; font-size: 15px; font-weight: 600; }
+.rgrid { display: grid; gap: 8px; grid-template-columns: repeat(4, 1fr); }
+.rgrid button { display: flex; flex-direction: column; align-items: flex-start; justify-content: center; min-height: 64px; padding: 8px 10px; }
+.rgrid button span { font-weight: 600; font-size: 16px; }
+.rgrid button small { color: var(--muted); font-size: 11.5px; line-height: 1.2; text-align: left; }
+.rgrid button.on small { color: var(--amber-ink); }
+.rgrid button.filled { border-color: #5a4a1f; }
+.rgrid button.filled span { color: var(--amber); }
+@media (max-width: 420px) { .rgrid { grid-template-columns: repeat(3, 1fr); } }
+
+.rfader { display: grid; grid-template-columns: 110px 1fr; align-items: center; gap: 10px; min-height: 48px; font-size: 14px; }
+.rfader input[type="range"] { width: 100%; height: 36px; accent-color: var(--amber); }
+.remote details { border-top: 1px solid var(--line); padding: 4px 0; }
+.remote details > summary { cursor: pointer; padding: 12px 0; font-weight: 600; }
+.remote details > summary::after { display: none; }
+.remote .rtrig { width: 100%; min-height: 52px; margin-bottom: 6px; }
+
+.rtabs { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; }
+.rtabs button { min-height: 44px; font-weight: 600; }
+
+.rmap { margin-top: 12px; }
+.rrow { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
+.rrow button { flex: 1; min-height: 48px; }
+.rcanvas { width: 100%; background: #0b0c10; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.rcanvas svg { display: block; touch-action: none; }
+.rcanvas .stage { fill: none; stroke: #3a3f4b; stroke-dasharray: 5 4; }
+.rcanvas .quad { fill: rgba(255,255,255,.04); stroke: #5b6070; stroke-width: 1.5; }
+.rcanvas .sel .quad { fill: rgba(255,176,0,.10); stroke: var(--amber); stroke-width: 2; }
+.rcanvas .grid { fill: none; stroke: #8a6a1a; stroke-width: 1; }
+.rcanvas .mask { fill: none; stroke: #7fd0ff; stroke-width: 1.5; stroke-dasharray: 4 3; }
+.rcanvas .num { fill: var(--muted); font-size: 13px; text-anchor: middle; pointer-events: none; }
+.rcanvas .hd { fill: rgba(255,176,0,.25); stroke: var(--amber); stroke-width: 2; }
+.rcanvas .hd.mask { fill: rgba(127,208,255,.25); stroke: #7fd0ff; }
+.rcanvas .hd.on { fill: var(--amber); }
+.rcanvas .hd.mask.on { fill: #7fd0ff; }
+.rcanvas .all circle { fill: rgba(255,255,255,.08); stroke: #c9ccd4; stroke-width: 1.5; }
+.rcanvas .all path { stroke: #c9ccd4; stroke-width: 1.5; fill: none; }
+.rcanvas .all.on circle { fill: rgba(255,255,255,.3); }
+.rread { margin: 8px 0 0; min-height: 22px; font-size: 13.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.rpad { display: grid; grid-template-columns: repeat(3, 1fr); grid-template-areas: ". u ." "l m r" ". d ."; gap: 8px; max-width: 280px; margin: 8px auto 0; }
+.rpad button { min-height: 56px; font-size: 20px; }
+.rpad button[aria-label="Step size"] { font-size: 14px; }
+.rsub { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; margin: 18px 0 0; }
