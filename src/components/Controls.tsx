@@ -4,7 +4,7 @@ import * as E from '@/lib/engine';
 import { useStore } from '@/lib/hooks';
 import {
   addMask, addOutput, addPanel, clearCue, removeMask, setImageMask, setMaskSmooth, setTracedMask, setMeshSize, setPanelInput, updateMask, deletePanel, layerTarget, movePanelLayer, movePanelToOutput, recallCue, removeOutput, redoMapping, runtime, saveCue, selectPanel, setScene, settings, undoMapping,
-  updateOutput, updatePanel,
+  removeOutline, removePlaylist, updateOutline, updatePlaylist, updateOutput, updatePanel,
 } from '@/lib/store';
 import { summarize, type Check } from '@/lib/preflight';
 import { BAR_CHOICES, BEATS_PER_BAR, CUE_FADE_CHOICES, FADE_CHOICES } from '@/lib/transitions';
@@ -14,12 +14,14 @@ import { allActions, params, resetParams, setParam, type ParamGroup } from '@/li
 import { POST_GROUPS } from '@/lib/post';
 import { defaultLabel, MAX_LABEL_CHARS } from '@/lib/text';
 import {
-  BANDS, BLEND_MODES, MAX_OUTPUTS, SCENES, SCENE_KEYS, TRANSITIONS, type Band, type BlendMode, type Mask, type OutputConfig,
-  type PanelLabel, type TransitionMode,
+  BANDS, BLEND_MODES, MAX_OUTPUTS, SCENES, SCENE_KEYS, TRANSITIONS, OUTLINE_STYLES, type Band, type BlendMode, type Mask, type Outline, type OutputConfig,
+  type PanelLabel, type PanelPlaylist, type TransitionMode,
 } from '@/lib/types';
 import { MAX_MASK_FEATHER } from '@/lib/mask';
+import { MAX_OUTLINE_RUNNERS, MAX_OUTLINE_SPEED, MAX_OUTLINE_WIDTH, OUTLINE_SYNCS } from '@/lib/outline';
 import { bakeMaskImage, traceImage, type TraceFit } from '@/lib/trace';
 import { MESH_SIZES } from '@/lib/mesh';
+import { MAX_PLAYLIST_ITEMS, PLAYLIST_BEAT_CHOICES, PLAYLIST_ORDERS } from '@/lib/playlist';
 import RemotePanel from './RemotePanel';
 
 function Row({ label, children }: { label: string; children: ReactNode }) {
@@ -313,9 +315,138 @@ function PanelMask({ index, mask, editing }: { index: number; mask?: Mask; editi
             <button onClick={() => setMaskSmooth(index, true)}>All smooth</button>
             <button onClick={() => setMaskSmooth(index, false)}>All corners</button>
           </div>
-          <Help>Drag the blue points onto the edge of the surface; arrow keys nudge the last one touched. A traced picture is only a starting outline, so tidy it here too. Click the dashed outline to add a point, double-click a point to switch between curve and corner, and Option/Alt-click to delete it. The mask is part of the mapping: undo covers it and cues leave it alone. Feather fades the edge inwards, so no light spills past the line (px at 1080p). The test grid ignores masks.</Help>
+          <Help>Drag the blue points onto the edge of the surface; arrow keys nudge the last one touched. A traced picture is only a starting outline, so tidy it here too. Click the dashed outline to add a point, double-click a point to switch between curve and corner, and Option/Alt-click to delete it. The mask is part of the mapping: undo covers it and cues leave it alone. Feather fades the edge inwards, so no light spills past the line (px at 1080p). The test grid ignores masks and fills each panel with white.</Help>
         </>
       )}
+    </>
+  );
+}
+
+/** The selected panel's slideshow: its own videos and pictures, changed every few beats. */
+function PanelPlaylistControls({ index, playlist, name }: { index: number; playlist?: PanelPlaylist; name: (src: string) => string }) {
+  const r = useStore(runtime);
+  if (!playlist) {
+    return (
+      <Row label="Slideshow">
+        <button onClick={() => updatePlaylist(index, {})}>Add slideshow</button>
+      </Row>
+    );
+  }
+  const set = (patch: Partial<PanelPlaylist>) => updatePlaylist(index, patch);
+  const library = [...r.videos.map((v) => `vid:${v.id}`), ...r.images.map((im) => `img:${im.id}`)];
+  const addable = library.filter((src) => !playlist.items.includes(src));
+  const move = (i: number, d: number) => {
+    const items = [...playlist.items];
+    const j = i + d;
+    if (j < 0 || j >= items.length) return;
+    [items[i], items[j]] = [items[j], items[i]];
+    set({ items });
+  };
+  return (
+    <>
+      <Row label="Slideshow">
+        <span className="btns">
+          <button className={playlist.on ? 'on' : ''} aria-pressed={playlist.on} onClick={() => set({ on: !playlist.on })}>{playlist.on ? 'On' : 'Off'}</button>
+          <button onClick={() => removePlaylist(index)}>Remove</button>
+        </span>
+      </Row>
+      <Row label="Change every">
+        <select value={playlist.beats} onChange={(e) => set({ beats: +e.target.value })}>
+          {PLAYLIST_BEAT_CHOICES.map((b) => <option key={b} value={b}>{b} {b === 1 ? 'beat' : 'beats'}{b % BEATS_PER_BAR === 0 ? ` (${b / BEATS_PER_BAR} ${b === BEATS_PER_BAR ? 'bar' : 'bars'})` : ''}</option>)}
+        </select>
+      </Row>
+      <Row label="Order">
+        <select value={playlist.order} onChange={(e) => set({ order: e.target.value as PanelPlaylist['order'] })}>
+          {PLAYLIST_ORDERS.map(([v, t]) => <option key={v} value={v}>{t}</option>)}
+        </select>
+      </Row>
+      {playlist.items.map((src, i) => (
+        <Row key={src} label={`${i + 1}`}>
+          <span className="btns">
+            <small>{name(src)}</small>
+            <button aria-label="Move up" disabled={i === 0} onClick={() => move(i, -1)}>↑</button>
+            <button aria-label="Move down" disabled={i === playlist.items.length - 1} onClick={() => move(i, 1)}>↓</button>
+            <button aria-label="Remove from slideshow" onClick={() => set({ items: playlist.items.filter((x) => x !== src) })}>×</button>
+          </span>
+        </Row>
+      ))}
+      {playlist.items.length < MAX_PLAYLIST_ITEMS && (
+        <Row label="Add">
+          <select value="" onChange={(e) => { if (e.target.value) set({ items: [...playlist.items, e.target.value] }); }}>
+            <option value="">{addable.length ? 'Pick a video or picture…' : 'Upload videos or pictures first'}</option>
+            {addable.map((src) => <option key={src} value={src}>{name(src)}</option>)}
+          </select>
+        </Row>
+      )}
+      <Help>The panel moves to the next item on a kick, counting from when you turn it on. It needs at least two items. Changes use the crossfade and transition above, so set Crossfade shorter than the step, or Off for hard cuts on the beat. Videos you remove from the library leave the list.</Help>
+    </>
+  );
+}
+
+/** The selected panel's neon outline: an animated line along the mask's edge, or the panel's border without a mask. */
+function PanelOutline({ index, outline, hasMask }: { index: number; outline?: Outline; hasMask: boolean }) {
+  if (!outline) {
+    return (
+      <Row label="Neon outline">
+        <button onClick={() => updateOutline(index, {})}>Add neon outline</button>
+      </Row>
+    );
+  }
+  const set = (patch: Partial<Outline>) => updateOutline(index, patch);
+  const preset = outline.color === 'c1' || outline.color === 'c2' ? outline.color : 'custom';
+  const rainbow = outline.style === 'rainbow';
+  return (
+    <>
+      <Row label="Neon outline">
+        <span className="btns">
+          <button className={outline.on ? 'on' : ''} aria-pressed={outline.on} onClick={() => set({ on: !outline.on })}>{outline.on ? 'On' : 'Off'}</button>
+          <button onClick={() => removeOutline(index)}>Remove</button>
+        </span>
+      </Row>
+      <Row label="Style">
+        <select value={outline.style} onChange={(e) => set({ style: e.target.value as Outline['style'] })}>
+          {OUTLINE_STYLES.map(([v, t]) => <option key={v} value={v}>{t}</option>)}
+        </select>
+      </Row>
+      {!rainbow && (
+        <Row label="Colour">
+          <span className="btns">
+            <select value={preset} aria-label="Colour source" onChange={(e) => set({ color: e.target.value === 'custom' ? '#00ffd5' : e.target.value })}>
+              <option value="c1">Main colour</option>
+              <option value="c2">Second colour</option>
+              <option value="custom">Custom</option>
+            </select>
+            {preset === 'custom' && <input type="color" value={outline.color} onChange={(e) => set({ color: e.target.value })} />}
+          </span>
+        </Row>
+      )}
+      <Row label="Thickness"><Slider value={outline.width} min={1} max={MAX_OUTLINE_WIDTH} step={1} onChange={(v) => set({ width: v })} format={(v) => `${v} px`} /></Row>
+      <Row label="Glow"><Slider value={outline.glow} min={0} max={1} step={0.01} onChange={(v) => set({ glow: v })} format={pct} /></Row>
+      <Row label="Lock to tempo">
+        <select value={outline.sync} onChange={(e) => set({ sync: +e.target.value })}>
+          {OUTLINE_SYNCS.map(([v, t]) => <option key={v} value={v}>{v === 0 ? t : `One lap per ${t}`}</option>)}
+        </select>
+      </Row>
+      {outline.sync === 0 && (
+        <Row label="Speed"><Slider value={outline.speed} min={0} max={MAX_OUTLINE_SPEED} step={0.01} onChange={(v) => set({ speed: v })} format={(v) => `${v.toFixed(2)} laps/s`} /></Row>
+      )}
+      <Row label={outline.style === 'chase' ? 'Comets' : outline.style === 'dashes' ? 'Dash groups' : 'Repeats round the line'}>
+        <Slider value={outline.runners} min={1} max={MAX_OUTLINE_RUNNERS} step={1} onChange={(v) => set({ runners: v })} format={(v) => String(v)} />
+      </Row>
+      {(outline.style === 'chase' || outline.style === 'dashes') && (
+        <Row label={outline.style === 'chase' ? 'Tail length' : 'Dash length'}>
+          <Slider value={outline.length} min={0.05} max={1} step={0.01} onChange={(v) => set({ length: v })} format={pct} />
+        </Row>
+      )}
+      <Row label="Reverse direction">
+        <input type="checkbox" checked={outline.reverse} onChange={(e) => set({ reverse: e.target.checked })} />
+      </Row>
+      <Row label="Brightness follows">
+        <select value={outline.band} onChange={(e) => set({ band: e.target.value as Band })}>
+          {BANDS.map(([v, t]) => <option key={v} value={v}>{t}</option>)}
+        </select>
+      </Row>
+      <Help>{hasMask ? 'The line runs along the mask outline' : 'The line runs along the panel’s border'} and is drawn over the panel, so it stays crisp however soft the mask’s edge is. Picture masks use the panel’s border. Cues remember the outline’s style and colour; the test grid hides it.</Help>
     </>
   );
 }
@@ -574,6 +705,8 @@ export default function Controls({ hidden }: { hidden: boolean }) {
             </Row>
             <Help>Panels lower in the list draw on top of earlier ones on the same projector. Add and Screen brighten what’s beneath (light on light), Multiply darkens it (shadows and tints). The test grid shows every panel as Normal.</Help>
             <PanelMask index={s.selected} mask={p.mask} editing={r.maskEdit} />
+            <PanelPlaylistControls index={s.selected} playlist={p.playlist} name={sourceName} />
+            <PanelOutline index={s.selected} outline={p.outline} hasMask={!!p.mask && !p.mask.image} />
             <PanelText index={s.selected} label={p.label} />
           </>
         )}

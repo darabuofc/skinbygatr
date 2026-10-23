@@ -1,3 +1,4 @@
+import { edgeOffset, moveEdge, moveMeshEdge } from './edge';
 import { flipPt, flipQuad, type Flip } from './homography';
 import { maskPathData, maskSegments } from './mask';
 import { meshLines } from './mesh';
@@ -14,6 +15,8 @@ const CSS = `
 #pm-handles svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
 #pm-handles polygon{fill:none;stroke:rgba(255,176,0,.45);stroke-width:1.5}
 #pm-handles polygon.sel{stroke:#ffb000;stroke-width:2.5}
+#pm-handles line.pm-edge{stroke:transparent;stroke-width:16;pointer-events:stroke;touch-action:none}
+#pm-handles line.pm-edge:hover,#pm-handles line.pm-edge.active{stroke:rgba(255,176,0,.3)}
 .pm-h,.pm-mid{position:absolute;pointer-events:auto;transform:translate(-50%,-50%);touch-action:none;cursor:grab;user-select:none;-webkit-user-select:none}
 .pm-h{width:26px;height:26px;border-radius:50%;border:2px solid #ffb000;background:rgba(0,0,0,.55)}
 .pm-h.sel{background:#ffb000}
@@ -76,7 +79,7 @@ const MESH_BADGE_OFFSET = 34;
 /** Pointer speed while Shift is held during a drag. */
 const FINE = 0.1;
 
-interface HandleSet { hs: HTMLDivElement[]; mid: HTMLDivElement; poly: SVGPolygonElement; }
+interface HandleSet { hs: HTMLDivElement[]; mid: HTMLDivElement; poly: SVGPolygonElement; edges: SVGLineElement[]; }
 
 const NO_FLIP: Flip = { h: false, v: false };
 
@@ -249,7 +252,7 @@ export class Output {
 
   rebuild() {
     if (!this.mounted) return;
-    this.items.forEach((it) => { if (!it) return; it.hs.forEach((h) => h.remove()); it.mid.remove(); it.poly.remove(); });
+    this.items.forEach((it) => { if (!it) return; it.hs.forEach((h) => h.remove()); it.mid.remove(); it.poly.remove(); it.edges.forEach((l) => l.remove()); });
     this.items = [];
     this.clearMaskEls();
     this.clearMeshEls();
@@ -261,6 +264,14 @@ export class Output {
       if (pn.output !== out) { this.items.push(undefined); return; }
       const poly = d.createElementNS('http://www.w3.org/2000/svg', 'polygon');
       this.svg.appendChild(poly);
+      // Pressing the outline itself slides that edge, to stretch the panel one way.
+      const edges: SVGLineElement[] = [0, 1, 2, 3].map((e) => {
+        const l = d.createElementNS('http://www.w3.org/2000/svg', 'line');
+        l.setAttribute('class', 'pm-edge');
+        this.attachEdgeDrag(l, i, e);
+        this.svg.appendChild(l);
+        return l;
+      });
       const hs: HTMLDivElement[] = [];
       for (let c = 0; c < 4; c++) {
         const h = d.createElement('div');
@@ -276,7 +287,7 @@ export class Output {
       mid.title = `Drag to move panel ${i + 1}`;
       this.attachDrag(mid, i, -1);
       this.handles.appendChild(mid);
-      this.items.push({ hs, mid, poly });
+      this.items.push({ hs, mid, poly, edges });
     });
     this.layout();
   }
@@ -313,6 +324,15 @@ export class Output {
       it.mid.classList.toggle('sel', i === s.selected);
       it.poly.setAttribute('points', px.map((q) => `${q[0]},${q[1]}`).join(' '));
       it.poly.setAttribute('class', i === s.selected ? 'sel' : '');
+      // Off while the outline is being edited, so a press there still adds a mask point.
+      const maskOn = runtime.get().maskEdit;
+      it.edges.forEach((l, e) => {
+        const a = px[e], b = px[(e + 1) % 4];
+        l.setAttribute('x1', String(a[0])); l.setAttribute('y1', String(a[1]));
+        l.setAttribute('x2', String(b[0])); l.setAttribute('y2', String(b[1]));
+        l.style.display = maskOn ? 'none' : '';
+        l.style.cursor = Math.abs(b[0] - a[0]) > Math.abs(b[1] - a[1]) ? 'ns-resize' : 'ew-resize';
+      });
     });
     this.layoutMesh(W, H, f);
     this.layoutMask(W, H, f);
@@ -588,6 +608,45 @@ export class Output {
     const ref = this.source ? { w: this.source.win.innerWidth, h: this.source.win.innerHeight } : rect;
     const [px, py] = flipPt(corner, this.outFlip());
     this.loupeText.textContent = `${Math.round(px * ref.w)}, ${Math.round(py * ref.h)} px`;
+  }
+
+  /** Drags one edge of a panel along its outward normal; Shift slows the pointer. */
+  private attachEdgeDrag(el: SVGLineElement, i: number, edge: number) {
+    el.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      try { el.setPointerCapture(e.pointerId); } catch { /* not capturable */ }
+      const { w: W, h: H } = this.stageRect();
+      const f = this.viewFlip();
+      let lx = e.clientX, ly = e.clientY, dx = 0, dy = 0, recorded = false;
+      const start = settings.get().panels[i];
+      const orig = start.corners.map((q) => [...q] as Pt) as Quad;
+      const origMesh = start.mesh;
+      settings.set({ selected: i });
+      runtime.set({ selCorner: null });
+      el.classList.add('active');
+      const move = (ev: PointerEvent) => {
+        if (ev.clientX === lx && ev.clientY === ly) return;
+        const k = ev.shiftKey ? FINE : 1;
+        const [mx, my] = stageDelta(((ev.clientX - lx) / W) * k, ((ev.clientY - ly) / H) * k, f);
+        dx += mx; dy += my;
+        lx = ev.clientX; ly = ev.clientY;
+        if (!recorded) { recordMapping(); recorded = true; }
+        const off = edgeOffset(orig, edge, [dx, dy], W / Math.max(1, H));
+        const corners = moveEdge(orig, edge, off);
+        const mesh = origMesh && moveMeshEdge(origMesh, edge, off);
+        settings.set((s) => ({ panels: s.panels.map((p, j) => (j === i ? { ...p, corners, ...(mesh ? { mesh } : {}) } : p)) }));
+      };
+      const up = (ev: PointerEvent) => {
+        try { el.releasePointerCapture(ev.pointerId); } catch { /* already released */ }
+        el.classList.remove('active');
+        el.removeEventListener('pointermove', move);
+        el.removeEventListener('pointerup', up);
+        el.removeEventListener('pointercancel', up);
+      };
+      el.addEventListener('pointermove', move);
+      el.addEventListener('pointerup', up);
+      el.addEventListener('pointercancel', up);
+    });
   }
 
   private attachDrag(el: HTMLDivElement, i: number, c: number) {

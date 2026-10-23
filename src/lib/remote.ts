@@ -227,6 +227,9 @@ export function buildSnapshot(s: Settings, blackout: boolean, params: ParamValue
 }
 
 /** The mapping as a remote needs it: shapes only, no content. */
+/** Five decimals is a fraction of a pixel even at 8K, and keeps the message well under Ably's size limit. */
+const r5 = (p: Pt): Pt => [Math.round(p[0] * 1e5) / 1e5, Math.round(p[1] * 1e5) / 1e5];
+
 export function buildGeo(s: Settings, sizes: Record<string, [number, number]>, canUndo: boolean, canRedo: boolean): RemoteGeo {
   return {
     selected: s.selected,
@@ -234,9 +237,9 @@ export function buildGeo(s: Settings, sizes: Record<string, [number, number]>, c
     panels: s.panels.map((p) => ({
       id: p.id,
       output: p.output,
-      corners: p.corners,
-      ...(p.mesh ? { mesh: { cols: p.mesh.cols, rows: p.mesh.rows, pts: p.mesh.pts } } : {}),
-      ...(p.mask && p.mask.points.length ? { mask: { points: p.mask.points.map((mp) => ({ p: mp.p, smooth: mp.smooth })), invert: p.mask.invert } } : {}),
+      corners: p.corners.map(r5) as Quad,
+      ...(p.mesh ? { mesh: { cols: p.mesh.cols, rows: p.mesh.rows, pts: p.mesh.pts.map(r5) } } : {}),
+      ...(p.mask && p.mask.points.length ? { mask: { points: p.mask.points.map((mp) => ({ p: r5(mp.p), smooth: mp.smooth })), invert: p.mask.invert } } : {}),
     })),
     canUndo,
     canRedo,

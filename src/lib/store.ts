@@ -1,6 +1,8 @@
 import { SPLIT_DRIVES, type SplitDrive } from './effects';
 import { isFxSource } from './fx';
 import { MapHistory } from './history';
+import { defaultOutline, sanitizeOutline } from './outline';
+import { defaultPlaylist, sanitizePlaylist } from './playlist';
 import { defaultMask, insertIndex, MAX_MASK_POINTS, MIN_MASK_POINTS, sanitizeMask } from './mask';
 import { MAX_MESH, meshCorners, meshFromQuad, MIN_MESH, resampleMesh, sanitizeMesh } from './mesh';
 import { Store } from './observable';
@@ -9,7 +11,7 @@ import { BAR_CHOICES, BEATS_PER_BAR, CUE_FADE_CHOICES, FADE_CHOICES, MAX_CUE_FAD
 import { defaultLabel, MAX_LABEL_CHARS } from './text';
 import {
   BANDS, BLEND_MODES, CUE_COUNT, MAX_OUTPUTS, SCENES, TRANSITIONS,
-  type Band, type BlendMode, type Look, type LookPanel, type Mask, type OutputConfig, type Panel, type PanelLabel, type Pt, type Quad, type Runtime,
+  type Band, type BlendMode, type Look, type LookPanel, type Mask, type Outline, type OutputConfig, type Panel, type PanelLabel, type PanelPlaylist, type Pt, type Quad, type Runtime,
   type Settings, type TransitionMode,
 } from './types';
 
@@ -144,6 +146,8 @@ export function sanitizeLook(v: unknown): Look | null {
     if (!validSource(source) || !validBand(band)) continue;
     const lp: LookPanel = { source, band };
     if (BLEND_IDS.includes(blend as BlendMode)) lp.blend = blend as BlendMode;
+    const outline = sanitizeOutline((p as Record<string, unknown>).outline);
+    if (outline) lp.outline = outline;
     if (typeof opacity === 'number' && Number.isFinite(opacity)) lp.opacity = clamp(opacity, 0, 1);
     panels[id] = lp;
   }
@@ -256,9 +260,11 @@ export function sanitize(raw: unknown): Settings {
       if (inputs) panel.inputs = inputs;
       const mask = sanitizeMask(p.mask);
       const mesh = sanitizeMesh(p.mesh);
+      const outline = sanitizeOutline(p.outline);
+      const playlist = sanitizePlaylist(p.playlist);
       // With a mesh, the corners are the grid's, whatever was saved beside it.
       if (mesh) panel.corners = meshCorners(mesh);
-      return { ...panel, ...(mesh ? { mesh } : {}), ...(mask ? { mask } : {}), ...(label ? { label } : {}) };
+      return { ...panel, ...(mesh ? { mesh } : {}), ...(mask ? { mask } : {}), ...(label ? { label } : {}), ...(outline ? { outline } : {}), ...(playlist ? { playlist } : {}) };
     });
   const cuesIn = Array.isArray(o.cues) ? o.cues : [];
   const s: Settings = {
@@ -426,6 +432,36 @@ export function selectPanel(i: number) {
 
 export function updatePanel(i: number, patch: Partial<Panel>) {
   settings.set((s) => ({ panels: s.panels.map((p, j) => (j === i ? { ...p, ...patch } : p)) }));
+}
+
+/** Changes a panel's neon outline, giving it the default one first if it had none. Appearance only, so it isn't part of undo. */
+export function updateOutline(i: number, patch: Partial<Outline>) {
+  settings.set((s) => ({
+    panels: s.panels.map((p, j) => {
+      if (j !== i) return p;
+      const next = sanitizeOutline({ ...(p.outline ?? defaultOutline()), ...patch });
+      return next ? { ...p, outline: next } : p;
+    }),
+  }));
+}
+
+/** Changes a panel's playlist, giving it an empty one first if it had none. Part of the mapping, so cues leave it alone. */
+export function updatePlaylist(i: number, patch: Partial<PanelPlaylist>) {
+  settings.set((s) => ({
+    panels: s.panels.map((p, j) => {
+      if (j !== i) return p;
+      const next = sanitizePlaylist({ ...(p.playlist ?? defaultPlaylist()), ...patch });
+      return next ? { ...p, playlist: next } : p;
+    }),
+  }));
+}
+
+export function removePlaylist(i: number) {
+  settings.set((s) => ({ panels: s.panels.map((p, j) => { if (j !== i) return p; const { playlist: _pl, ...rest } = p; return rest; }) }));
+}
+
+export function removeOutline(i: number) {
+  settings.set((s) => ({ panels: s.panels.map((p, j) => { if (j !== i) return p; const { outline: _o, ...rest } = p; return rest; }) }));
 }
 
 export function addPanel() {
@@ -613,7 +649,7 @@ export function captureLook(s: Settings, values: ParamValues = params.get()): Lo
   return {
     scene: s.scene, c1: s.c1, c2: s.c2, react: s.react, strobe: s.strobe, span: s.span,
     rgbSplit: s.rgbSplit, rgbDrive: s.rgbDrive,
-    panels: Object.fromEntries(s.panels.map((p) => [p.id, { source: p.source, band: p.band, blend: p.blend, opacity: p.opacity }])),
+    panels: Object.fromEntries(s.panels.map((p) => [p.id, { source: p.source, band: p.band, blend: p.blend, opacity: p.opacity, ...(p.outline ? { outline: { ...p.outline } } : {}) }])),
     params: JSON.parse(JSON.stringify(values)),
     fadeSec: s.cueFade,
     transition: s.transition,

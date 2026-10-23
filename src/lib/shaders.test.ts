@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MESH_VS, PANEL_FS, PANEL_MESH_FS, POST_FS, SCENE_FS, VS } from './shaders';
+import { MESH_VS, NEON_FS, NEON_VS, PANEL_FS, PANEL_MESH_FS, POST_FS, SCENE_FS, VS } from './shaders';
 
 /** Uniform names declared in a shader, including comma lists like `uniform float uA, uB;` and arrays. */
 function declared(src: string) {
@@ -11,7 +11,7 @@ function declared(src: string) {
 }
 
 describe('shaders', () => {
-  it.each([['VS', VS], ['SCENE_FS', SCENE_FS], ['PANEL_FS', PANEL_FS], ['PANEL_MESH_FS', PANEL_MESH_FS], ['MESH_VS', MESH_VS], ['POST_FS', POST_FS]])(
+  it.each([['VS', VS], ['SCENE_FS', SCENE_FS], ['PANEL_FS', PANEL_FS], ['PANEL_MESH_FS', PANEL_MESH_FS], ['MESH_VS', MESH_VS], ['POST_FS', POST_FS], ['NEON_FS', NEON_FS], ['NEON_VS', NEON_VS]])(
     '%s declares every uniform it uses',
     (_, src) => {
       const used = new Set(src.match(/\bu[A-Z]\w*/g) ?? []);

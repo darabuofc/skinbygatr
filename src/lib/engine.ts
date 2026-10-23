@@ -10,6 +10,7 @@ import {
   allActions, ParamSmoother, params, parseParamAction, parseTriggerAction, resetParams, sanitizeParams, setParamFromFader,
 } from './params';
 import { Output } from './output';
+import { nextSource, PlaylistCounter } from './playlist';
 import { runChecks, type PreflightInput } from './preflight';
 import {
   BarCounter, beatPeriod, Crossfade, glideAt, MAX_CUE_FADE_SEC, MAX_FADE_SEC, needsFade, type Glide, type WallLook,
@@ -62,6 +63,7 @@ let timerUntil = 0;
 let lastT = 0;
 /** Kicks towards the next automatic scene change. */
 const bars = new BarCounter();
+const playlistBeats = new PlaylistCounter();
 const fader = new Crossfade();
 /** What the wall is showing (or fading to), to fade from on the next change. */
 let shown: WallLook | null = null;
@@ -329,6 +331,7 @@ function drawFrame() {
     setScene((s.scene + 1) % SCENES.length);
     autoChanging = false;
   }
+  stepPlaylists(s, L.kick);
   const mix = fader.mix(t);
   const from = mix !== null ? fader.from : null;
   // Everything but the panels and flip is the same for every projector: one clock, one look.
@@ -336,7 +339,7 @@ function drawFrame() {
     scene: s.scene,
     c1: hexToRgb(s.c1),
     c2: hexToRgb(s.c2),
-    L, t, phaseA, phaseB,
+    L, t, bpm: s.bpm, phaseA, phaseB,
     span: s.span,
     testGrid: s.testGrid,
     blackout: r.blackout,
@@ -401,6 +404,26 @@ function watchdog() {
   for (const sf of [...surfaces.values()]) if (sf.output.isPopup() && !isOpenPopup(sf)) popupClosed(sf.id);
   const now = performance.now();
   if (now - lastFrameMs > STALL_MS) { timerUntil = now + TIMER_MS; gen++; schedule(gen); }
+}
+
+/* ---------- panel playlists ---------- */
+
+/** The panel without a removed library item in its playlist. */
+function withoutItem(p: Panel, source: string): Panel {
+  return p.playlist?.items.includes(source) ? { ...p, playlist: { ...p.playlist, items: p.playlist.items.filter((x) => x !== source) } } : p;
+}
+
+/** On a kick, moves each panel with a running playlist on to its next item once its beats are up; one settings change, so one fade. */
+function stepPlaylists(s: Settings, kick: boolean) {
+  const running = s.panels.filter((p) => p.playlist?.on && p.playlist.items.length > 1);
+  playlistBeats.keepOnly(new Set(running.map((p) => p.id)));
+  if (!kick) return;
+  const due = new Map<string, string>();
+  for (const p of running) {
+    const pl = p.playlist!;
+    if (playlistBeats.kick(p.id, pl.beats)) due.set(p.id, nextSource(pl, p.source));
+  }
+  if (due.size) settings.set((cur) => ({ panels: cur.panels.map((p) => (due.has(p.id) ? { ...p, source: due.get(p.id)! } : p)) }));
 }
 
 /* ---------- scene transitions ---------- */
@@ -727,7 +750,7 @@ export async function removeVideo(id: string) {
   blobs.delete(id);
   surfaces.forEach((sf) => sf.renderer?.dropVideo(id));
   runtime.set((r) => ({ videos: r.videos.filter((x) => x.id !== id) }));
-  settings.set((s) => ({ panels: s.panels.map((p) => (p.source === `vid:${id}` ? { ...p, source: 'gen' } : p)) }));
+  settings.set((s) => ({ panels: s.panels.map((p) => withoutItem(p.source === `vid:${id}` ? { ...p, source: 'gen' } : p, `vid:${id}`)) }));
   updateStorage();
 }
 
@@ -809,7 +832,7 @@ export async function removeImage(id: string) {
   bitmaps.delete(id);
   surfaces.forEach((sf) => sf.renderer?.dropImage(id));
   runtime.set((r) => ({ images: r.images.filter((x) => x.id !== id) }));
-  settings.set((s) => ({ panels: s.panels.map((p) => (p.source === `img:${id}` ? { ...p, source: 'gen' } : p)) }));
+  settings.set((s) => ({ panels: s.panels.map((p) => withoutItem(p.source === `img:${id}` ? { ...p, source: 'gen' } : p, `img:${id}`)) }));
   settings.set((s) => ({
     panels: s.panels.map((p) => {
       if (!p.inputs || !Object.values(p.inputs).includes(id)) return p;

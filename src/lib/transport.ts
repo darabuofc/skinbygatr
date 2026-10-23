@@ -100,7 +100,7 @@ export function createAblyTransport(key: string, channel: string): Transport {
   return {
     send: (m) => {
       if (closed) return;
-      if (ch && status === 'connected') ch.publish('m', m);
+      if (ch && status === 'connected') ch.publish('m', m).catch((e: unknown) => console.error('Remote message not sent:', e instanceof Error ? e.message : e));
       else if (queue.length < 20) queue.push(m);
     },
     onMessage: (fn) => { msgs.add(fn); return () => { msgs.delete(fn); }; },

@@ -46,6 +46,53 @@ export interface Panel {
   mask?: Mask;
   /** Text centred on the panel; missing means none. */
   label?: PanelLabel;
+  /** Animated neon line along the mask's outline, or the panel's border when it has no outline mask; missing means none. */
+  outline?: Outline;
+  /** Videos and pictures this panel steps through on the beat; missing means it keeps its one source. */
+  playlist?: PanelPlaylist;
+}
+
+/** A panel's own slideshow. Each change sets the panel's `source` to the next item. */
+export interface PanelPlaylist {
+  on: boolean;
+  /** Sources ('vid:<id>' or 'img:<id>'), in play order. */
+  items: string[];
+  /** Beats between changes. */
+  beats: number;
+  order: 'seq' | 'shuffle';
+}
+
+export type OutlineStyle = 'chase' | 'dashes' | 'pulse' | 'rainbow' | 'flicker';
+
+export const OUTLINE_STYLES: [OutlineStyle, string][] = [
+  ['chase', 'Chase (comets run round)'],
+  ['dashes', 'Marching dashes'],
+  ['pulse', 'Pulse (whole line breathes)'],
+  ['rainbow', 'Rainbow (colour travels)'],
+  ['flicker', 'Neon sign flicker'],
+];
+
+/** Neon line drawn over a panel's edge. Appearance only, so cues carry it. */
+export interface Outline {
+  on: boolean;
+  style: OutlineStyle;
+  /** 'c1' or 'c2' follow the show's colours; otherwise a #rrggbb colour. */
+  color: string;
+  /** Line thickness in pixels at 1080p. */
+  width: number;
+  /** Glow spread, 0 (crisp line) to 1. */
+  glow: number;
+  /** Laps per second when not synced to the beat. */
+  speed: number;
+  /** Comets or dashes around the loop. */
+  runners: number;
+  /** How much of the gap between runners each one fills, 0.05..1. */
+  length: number;
+  reverse: boolean;
+  /** Brightness follows this band like the visuals do. */
+  band: Band;
+  /** Bars per lap locked to the tempo; 0 runs at `speed` instead. */
+  sync: number;
 }
 
 /**
@@ -138,6 +185,8 @@ export interface LookPanel {
   band: Band;
   blend?: BlendMode;
   opacity?: number;
+  /** Missing in cues saved before neon outlines; recalling those leaves the outline as it is. */
+  outline?: Outline;
 }
 
 export type MidiKind = 'note' | 'cc';

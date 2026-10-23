@@ -65,12 +65,17 @@ function sendState(force: boolean) {
 
 function sendGeo(force: boolean) {
   if (!transport) return;
-  const r = runtime.get();
-  const g = buildGeo(settings.get(), outputPixelSizes(), r.canUndo, r.canRedo);
-  const sig = JSON.stringify(g);
-  if (!force && sig === lastGeo) return;
-  lastGeo = sig;
-  transport.send({ t: 'geo', g });
+  try {
+    const r = runtime.get();
+    const g = buildGeo(settings.get(), outputPixelSizes(), r.canUndo, r.canRedo);
+    const sig = JSON.stringify(g);
+    if (!force && sig === lastGeo) return;
+    lastGeo = sig;
+    transport.send({ t: 'geo', g });
+  } catch (e) {
+    // State still goes out, so a failure here would otherwise leave the phone waiting with no clue why.
+    console.error('Remote mapping not sent:', e);
+  }
 }
 
 /** Changes arrive in bursts (a fader drag), so state goes out at most five times a second. */

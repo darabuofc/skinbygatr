@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   addMask, addOutput, addPanel, cueFadeInProgress, cueTransitionInProgress, defaultSettings, onCueRecall, type CueRecall, deleteMaskPoint, FIRST_OUTPUT, insertMaskPoint, KEY, layerTarget, loadSettings,
   moveMaskPoint, moveMeshPoint, movePanelLayer, movePanelToOutput, recallCue, redoMapping, removeMask, removeOutput, runtime, sanitize, sanitizeLook,
-  sanitizeMidi, sanitizeOutputs, saveCue, sanitizeInputs, selectPanel, setMeshSize, setPanelInput, settings, toggleMaskPoint, undoMapping, updateMask,
+  sanitizeMidi, sanitizeOutputs, saveCue, updateOutline, removeOutline, sanitizeInputs, selectPanel, setMeshSize, setPanelInput, settings, toggleMaskPoint, undoMapping, updateMask,
 } from './store';
 import { defaultParams, params, resetParams, setParam } from './params';
 import { MAX_OUTPUTS } from './types';
@@ -52,6 +52,50 @@ describe('sanitize', () => {
     expect(s.panels[3]).not.toHaveProperty('label');
     expect(s.panels[4].label).toMatchObject({ rotation: -90, size: 0.3, color: '#00ff88', pulse: true });
     expect(s.panels[4].label!.text).toHaveLength(120);
+  });
+});
+
+describe('neon outline', () => {
+  it('is added with defaults, edited, and kept through a save and load', () => {
+    settings.set(defaultSettings());
+    updateOutline(0, { style: 'dashes', width: 12 });
+    const o = settings.get().panels[0].outline!;
+    expect(o.style).toBe('dashes');
+    expect(o.width).toBe(12);
+    expect(sanitize(JSON.parse(JSON.stringify(settings.get()))).panels[0].outline).toEqual(o);
+    removeOutline(0);
+    expect(settings.get().panels[0].outline).toBeUndefined();
+  });
+
+  it('clamps edits to valid values', () => {
+    settings.set(defaultSettings());
+    updateOutline(0, { width: 9999, runners: 0 });
+    expect(settings.get().panels[0].outline).toMatchObject({ width: 40, runners: 1 });
+  });
+
+  it('comes back with a cue, including being switched off, and cues without one leave it alone', () => {
+    settings.set(defaultSettings());
+    const id = settings.get().panels[0].id;
+    updateOutline(0, { on: true, style: 'rainbow' });
+    saveCue(0);
+    updateOutline(0, { on: false, style: 'flicker' });
+    saveCue(1);
+    updateOutline(0, { on: true, style: 'chase' });
+    recallCue(0);
+    expect(settings.get().panels.find((p) => p.id === id)!.outline).toMatchObject({ on: true, style: 'rainbow' });
+    recallCue(1);
+    expect(settings.get().panels.find((p) => p.id === id)!.outline).toMatchObject({ on: false, style: 'flicker' });
+    // A cue saved on a panel with no outline (or an older cue) leaves the outline as it is.
+    settings.set(defaultSettings());
+    saveCue(2);
+    updateOutline(0, { style: 'pulse' });
+    recallCue(2);
+    expect(settings.get().panels[0].outline!.style).toBe('pulse');
+  });
+
+  it('drops a malformed outline from a cue instead of failing the cue', () => {
+    const look = sanitizeLook({ scene: 1, panels: { a: { source: 'gen', band: 'none', outline: 'nope' } } })!;
+    expect(look.panels.a.outline).toBeUndefined();
   });
 });
 

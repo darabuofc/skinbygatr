@@ -324,7 +324,7 @@ ${mesh ? `  vec2 uv = clamp(vUv, 0.0, 1.0);` : `  vec2 px = vec2(gl_FragCoord.x,
     float diag = max(aaLine(abs(d1), fwidth(d1), 2.0), aaLine(abs(d2), fwidth(d2), 2.0));
     float r = length(uv - 0.5) - 0.35;
     float ring = aaLine(abs(r), fwidth(r), 2.0);
-    col = mix(col * 0.3, uGridColor, max(max(lines * 0.7, border), max(diag, ring)));
+    col = mix(vec3(1.0), uGridColor, max(max(lines * 0.7, border), max(diag, ring)));
   }
 
   float a = 1.0;
@@ -383,4 +383,65 @@ void main() {
   float d = length((uv - 0.5) * vec2(uRes.x / uRes.y, 1.0)) / length(vec2(0.5 * uRes.x / uRes.y, 0.5));
   col *= mix(1.0, smoothstep(1.05, 0.35, d), uVignette);
   o = vec4(clamp(col, 0.0, 1.0), 1.0);
+}`;
+
+/** Neon outline strip: clip-space position, position round the loop and side of the line. */
+export const NEON_VS = `#version 300 es
+layout(location = 0) in vec2 aPos;
+layout(location = 1) in vec2 aLine;
+out vec2 vLine;
+void main() {
+  vLine = aLine;
+  gl_Position = vec4(aPos, 0.0, 1.0);
+}`;
+
+/**
+ * Neon outline: a bright core with a soft glow falling off from it, brightness along the loop set
+ * by the style. uStyle picks it: 0 chase, 1 dashes, 2 pulse, 3 rainbow, 4 flicker. uPhase is how far
+ * round the loop the animation is, in laps (signed), uDir its direction. Draws with screen blending,
+ * so where the line overlaps itself or the panel beneath it only brightens.
+ */
+export const NEON_FS = `#version 300 es
+precision highp float;
+in vec2 vLine;
+out vec4 o;
+uniform float uStyle, uPhase, uDir, uTime, uRunners, uLen, uHalf, uCore, uGlowPx, uGlow, uLevel, uMaster, uOpacity;
+uniform vec3 uColor;
+
+${NOISE_GLSL}
+
+vec3 hsv(float h) {
+  vec3 k = clamp(abs(fract(h + vec3(0.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0) - 1.0, 0.0, 1.0);
+  return k;
+}
+
+void main() {
+  float s = vLine.x;
+  float d = abs(vLine.y) * uHalf;
+  float core = 1.0 - smoothstep(uCore - 0.5, uCore + 1.0, d);
+  float glow = exp(-max(d - uCore, 0.0) / max(uGlowPx, 0.5)) * (0.12 + 0.88 * uGlow);
+  // The strip's own edge fades out, so the glow is never cut off square.
+  glow *= 1.0 - smoothstep(0.7, 1.0, abs(vLine.y));
+  float m = 1.0;
+  vec3 col = uColor;
+  if (uStyle < 0.5) {
+    float b = fract(-uDir * (s - uPhase) * uRunners);
+    m = 0.07 + (b < uLen ? pow(1.0 - b / uLen, 1.6) : 0.0);
+  } else if (uStyle < 1.5) {
+    float x = fract((s - uPhase) * uRunners * 4.0);
+    float on = smoothstep(0.0, 0.06, x) * (1.0 - smoothstep(uLen * 0.8, uLen * 0.8 + 0.06, x));
+    m = 0.08 + on;
+  } else if (uStyle < 2.5) {
+    m = 0.3 + 0.7 * (0.5 + 0.5 * sin(6.2831853 * (uPhase * uRunners)));
+  } else if (uStyle < 3.5) {
+    col = hsv(s * uRunners - uPhase * uRunners * uDir);
+  } else {
+    float seg = floor(s * 12.0);
+    float t = floor(uTime * 11.0);
+    m = hash(vec2(seg, t)) < 0.1 ? 0.12 : 1.0;
+    m *= hash(vec2(t, 7.0)) < 0.06 ? 0.3 : 1.0;
+  }
+  // The core runs white-hot with the colour in the glow, as a lit tube does.
+  vec3 rgb = mix(col * (glow * 1.6), mix(col, vec3(1.0), 0.75), core);
+  o = vec4(rgb * (m * uLevel * uMaster * uOpacity), 1.0);
 }`;

@@ -2,12 +2,14 @@ import { FX, fxById, fxIdOf, fxSource, fxTargetSize, fxUniformNames, type FxDef 
 import { flipQuad, invert3, squareToQuad, toColumnMajor, type Flip } from './homography';
 import { meshKey, tessellate } from './mesh';
 import { hueToRgb, type PostValues } from './post';
-import { MESH_VS, PANEL_FS, PANEL_MESH_FS, POST_FS, SCENE_FS, VS } from './shaders';
+import { MESH_VS, NEON_FS, NEON_VS, PANEL_FS, PANEL_MESH_FS, POST_FS, SCENE_FS, VS } from './shaders';
 import type { Levels } from './audio';
 import { pictureBounds } from './trace';
 import { drawMask, MASK_SCALE, maskKey } from './mask';
 import { drawLabel, labelKey, panelAspect } from './text';
-import type { BlendMode, Mask, Panel, Pt, TransitionMode } from './types';
+import { buildStrip, outlinePath, outlinePhase, STRIP_STRIDE, stripHalf, stripKey } from './outline';
+import { BEATS_PER_BAR } from './transitions';
+import type { BlendMode, Mask, Outline, OutlineStyle, Panel, Pt, TransitionMode } from './types';
 
 const SW = 1920;
 const SH = 1080;
@@ -36,6 +38,8 @@ export interface FrameInput {
   c2: number[];
   L: Levels;
   t: number;
+  /** Tempo, for outlines locked to the bars. */
+  bpm: number;
   phaseA: number;
   phaseB: number;
   span: boolean;
@@ -72,10 +76,19 @@ type Quad = [Pt, Pt, Pt, Pt];
 /** A panel's corners in output pixels, mirrored if the output is flipped. */
 const toPx = (pn: Panel, W: number, H: number, flip: Flip) =>
   flipQuad(pn.corners, flip).map(([x, y]) => [x * W, y * H] as Pt) as Quad;
+/** A panel's neon outline strip on the GPU, rebuilt when its path, the output size or the line's width changes. */
+interface StripGeo { key: string; vao: WebGLVertexArrayObject; vbo: WebGLBuffer; count: number; }
+
+const NEON_UNIFORMS = ['uStyle', 'uPhase', 'uDir', 'uTime', 'uRunners', 'uLen', 'uHalf', 'uCore', 'uGlowPx', 'uGlow', 'uLevel', 'uMaster', 'uOpacity', 'uColor'];
+const NEON_STYLE_INDEX: Record<OutlineStyle, number> = { chase: 0, dashes: 1, pulse: 2, rainbow: 3, flicker: 4 };
+
 /** Key of a panel shader's buffer: one per panel and shader, so a fade between two shaders has both. */
 const fxKey = (panelId: string, fxId: string) => `${panelId}|${fxId}`;
 
 const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
+
+/** #rrggbb as 0..1 channels. The outline's colour is sanitised, so this only sees valid ones. */
+const hexRgb = (h: string): number[] => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255);
 
 /** Uniforms of both panel programs; the flat one also has uInvH. */
 const PANEL_UNIFORMS = ['uCanvas', 'uTex', 'uSrc', 'uFlipY', 'uLevel', 'uFlash',
@@ -151,6 +164,9 @@ export class Renderer {
   /** Program for mesh-warped panels; null when the driver rejected it. */
   private meshProg: Prog | null = null;
   private meshes = new Map<string, MeshGeo>();
+  /** Program for neon outlines; null when the driver rejected it, and outlines are then left out. */
+  private neonProg: Prog | null = null;
+  private strips = new Map<string, StripGeo>();
   /** Post-effect pass, and the frame the panels draw into when it's on. Null if the driver rejected it. */
   private postProg: Prog | null = null;
   private postTarget: Target | null = null;
@@ -193,7 +209,7 @@ export class Renderer {
     if (!gl) throw new Error('This browser has no WebGL2. Use a recent Chrome, Edge, Firefox or Safari.');
     this.gl = gl;
     canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); this.lost = true; });
-    canvas.addEventListener('webglcontextrestored', () => { this.videoTex.clear(); this.imageTex.clear(); this.pictures.clear(); this.labels.clear(); this.postTarget = null; this.masks.clear(); this.meshes.clear(); this.fxTargets.clear(); this.init(); this.lost = false; });
+    canvas.addEventListener('webglcontextrestored', () => { this.videoTex.clear(); this.imageTex.clear(); this.pictures.clear(); this.labels.clear(); this.postTarget = null; this.masks.clear(); this.meshes.clear(); this.strips.clear(); this.fxTargets.clear(); this.init(); this.lost = false; });
     this.init();
   }
 
@@ -210,6 +226,7 @@ export class Renderer {
       (msg) => this.problems.push(`Post effects are off: ${msg}`));
     this.postTarget = null;
     this.meshProg = tryLink(gl, PANEL_MESH_FS, PANEL_UNIFORMS, (msg) => this.problems.push(`Mesh warp is off: ${msg}`), MESH_VS);
+    this.neonProg = tryLink(gl, NEON_FS, NEON_UNIFORMS, (msg) => this.problems.push(`Neon outlines are off: ${msg}`), NEON_VS);
     // Compiled up front, so picking a panel shader mid-show never stalls a frame, and a broken one shows at load.
     this.fxProgs.clear();
     for (const def of FX) {
@@ -416,9 +433,74 @@ export class Renderer {
     return g;
   }
 
-  /** Frees text, mask and mesh data of panels that no longer exist or no longer have them. */
+  private dropStrip(id: string, g: StripGeo) {
+    this.gl.deleteVertexArray(g.vao);
+    this.gl.deleteBuffer(g.vbo);
+    this.strips.delete(id);
+  }
+
+  /** The panel's outline strip, built only when its path or the line's size changes. Null when there's nothing to draw. */
+  private stripGeo(pn: Panel, o: Outline, W: number, H: number, flip: Flip): StripGeo | null {
+    const gl = this.gl;
+    const half = stripHalf(o, H);
+    const key = stripKey(pn, flip, W, H, half);
+    const cur = this.strips.get(pn.id);
+    if (cur && cur.key === key) return cur;
+    if (cur) this.dropStrip(pn.id, cur);
+    const strip = buildStrip(outlinePath(pn, flip), W, H, half);
+    if (!strip) return null;
+    const vao = gl.createVertexArray()!;
+    gl.bindVertexArray(vao);
+    const vbo = gl.createBuffer()!;
+    gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+    gl.bufferData(gl.ARRAY_BUFFER, strip.verts, gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, STRIP_STRIDE * 4, 0);
+    gl.enableVertexAttribArray(1);
+    gl.vertexAttribPointer(1, 2, gl.FLOAT, false, STRIP_STRIDE * 4, 8);
+    gl.bindVertexArray(this.vao);
+    const g: StripGeo = { key, vao, vbo, count: strip.count };
+    this.strips.set(pn.id, g);
+    return g;
+  }
+
+  /** Draws the panel's neon line over it, past the panel's own scissor so the glow isn't cut off. */
+  private drawOutline(pn: Panel, f: FrameInput, W: number, H: number) {
+    const o = pn.outline;
+    const prog = this.neonProg;
+    if (!o || !o.on || !prog) return;
+    const geo = this.stripGeo(pn, o, W, H, f.flip);
+    if (!geo) return;
+    const gl = this.gl;
+    const { p, u } = prog;
+    gl.useProgram(p);
+    gl.disable(gl.SCISSOR_TEST);
+    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_COLOR);
+    const k = H / 1080;
+    const rgb = o.color === 'c1' ? f.c1 : o.color === 'c2' ? f.c2 : hexRgb(o.color);
+    const phase = outlinePhase(o, f.t, f.bpm, BEATS_PER_BAR);
+    gl.uniform1f(u.uStyle, NEON_STYLE_INDEX[o.style]);
+    gl.uniform1f(u.uPhase, phase);
+    gl.uniform1f(u.uDir, o.reverse ? -1 : 1);
+    gl.uniform1f(u.uTime, f.t);
+    gl.uniform1f(u.uRunners, o.runners);
+    gl.uniform1f(u.uLen, o.style === 'dashes' ? o.length : Math.min(1, o.length));
+    gl.uniform1f(u.uHalf, stripHalf(o, H));
+    gl.uniform1f(u.uCore, Math.max(0.6, (o.width / 2) * k));
+    gl.uniform1f(u.uGlowPx, (o.width * 1.5 + 10) * k * (0.3 + o.glow));
+    gl.uniform1f(u.uGlow, o.glow);
+    gl.uniform1f(u.uLevel, f.levelFor({ ...pn, band: o.band }));
+    gl.uniform1f(u.uMaster, f.master);
+    gl.uniform1f(u.uOpacity, clamp01(pn.opacity));
+    gl.uniform3f(u.uColor, rgb[0], rgb[1], rgb[2]);
+    gl.bindVertexArray(geo.vao);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, geo.count);
+    gl.bindVertexArray(this.vao);
+  }
+
+  /** Frees text, mask, mesh and outline data of panels that no longer exist or no longer have them. */
   private pruneLabels(panels: Panel[]) {
-    if (this.labels.size === 0 && this.masks.size === 0 && this.meshes.size === 0) return;
+    if (this.labels.size === 0 && this.masks.size === 0 && this.meshes.size === 0 && this.strips.size === 0) return;
     const ids = new Set(panels.map((p) => p.id));
     for (const [id, e] of this.labels) {
       if (!ids.has(id)) { this.gl.deleteTexture(e.tex); this.labels.delete(id); }
@@ -430,6 +512,10 @@ export class Renderer {
     for (const [id, g] of this.meshes) {
       const p = panels.find((x) => x.id === id);
       if (!p || !p.mesh) this.dropMesh(id, g);
+    }
+    for (const [id, g] of this.strips) {
+      const p = panels.find((x) => x.id === id);
+      if (!p || !p.outline?.on) this.dropStrip(id, g);
     }
   }
 
@@ -667,6 +753,10 @@ export class Renderer {
         gl.drawElements(gl.TRIANGLES, geo.count, gl.UNSIGNED_SHORT, 0);
         gl.bindVertexArray(this.vao);
       } else gl.drawArrays(gl.TRIANGLES, 0, 3);
+      if (!f.testGrid && !f.blackout) {
+        this.drawOutline(pn, f, W, H);
+        gl.enable(gl.SCISSOR_TEST);
+      }
     });
     if (post && target) this.postPass(target, post, W, H);
   }
