@@ -216,10 +216,15 @@ export interface SmdConfig {
   flashLimit: number;
 }
 
+/** A venue's screen set-up, saved by name: its shape, fit and LED corrections. Content is chosen per show, not saved. */
+export type SmdPreset = { name: string } & Pick<SmdConfig, 'width' | 'height' | 'fit' | 'maxBrightness' | 'gamma' | 'warmth' | 'flashLimit'>;
+
 export interface Settings {
   version: 3;
   /** The SMD screen's size and content; used in SMD mode, ignored when mapping. */
   smd: SmdConfig;
+  /** Named screen set-ups, newest saves replacing the same name. */
+  smdPresets: SmdPreset[];
   outputs: OutputConfig[];
   panels: Panel[];
   selected: number;

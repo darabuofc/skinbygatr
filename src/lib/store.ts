@@ -6,7 +6,7 @@ import { defaultPlaylist, sanitizePlaylist } from './playlist';
 import { defaultMask, insertIndex, MAX_MASK_POINTS, MIN_MASK_POINTS, sanitizeMask } from './mask';
 import { MAX_MESH, meshCorners, meshFromQuad, MIN_MESH, resampleMesh, sanitizeMesh } from './mesh';
 import { Store } from './observable';
-import { clampSmdSize, defaultSmd, sanitizeSmd } from './smd';
+import { clampSmdSize, defaultSmd, presetOf, sanitizePresets, sanitizeSmd, withPreset } from './smd';
 import { params, sanitizeParamSnapshot, type ParamValues } from './params';
 import { BAR_CHOICES, BEATS_PER_BAR, CUE_FADE_CHOICES, FADE_CHOICES, MAX_CUE_FADE_SEC } from './transitions';
 import { defaultLabel, MAX_LABEL_CHARS } from './text';
@@ -58,6 +58,7 @@ export function defaultSettings(): Settings {
   return {
     version: 3,
     smd: defaultSmd(),
+    smdPresets: [],
     outputs: defaultOutputs(),
     panels: defaultPanels(),
     selected: 0,
@@ -272,6 +273,7 @@ export function sanitize(raw: unknown): Settings {
   const s: Settings = {
     version: 3,
     smd: sanitizeSmd(o.smd, validSource, validBand),
+    smdPresets: sanitizePresets(o.smdPresets, validSource, validBand),
     outputs,
     panels: panels.length ? panels : defaultPanels(outputs[0].id),
     selected: 0,
@@ -441,6 +443,23 @@ export function updateSmd(patch: Partial<Settings['smd']>) {
     if ('width' in patch || 'height' in patch) Object.assign(next, clampSmdSize(next.width, next.height));
     return { smd: next };
   });
+}
+
+/** Saves the screen's shape, fit and LED corrections under a name, replacing a set-up with the same name. */
+export function saveSmdPreset(name: string) {
+  settings.set((s) => ({ smdPresets: withPreset(s.smdPresets, presetOf(name, s.smd)) }));
+}
+
+/** Puts a saved set-up on the screen. What it shows is left as it is. */
+export function loadSmdPreset(name: string) {
+  const p = settings.get().smdPresets.find((x) => x.name === name);
+  if (!p) return;
+  const { name: _n, ...rest } = p;
+  updateSmd(rest);
+}
+
+export function deleteSmdPreset(name: string) {
+  settings.set((s) => ({ smdPresets: s.smdPresets.filter((x) => x.name !== name) }));
 }
 
 export function updatePanel(i: number, patch: Partial<Panel>) {

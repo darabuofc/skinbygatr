@@ -4,7 +4,7 @@ import * as E from '@/lib/engine';
 import { useStore } from '@/lib/hooks';
 import {
   addMask, addOutput, addPanel, clearCue, removeMask, setImageMask, setMaskSmooth, setTracedMask, setMeshSize, setPanelInput, updateMask, deletePanel, layerTarget, movePanelLayer, movePanelToOutput, recallCue, removeOutput, redoMapping, runtime, saveCue, selectPanel, setScene, settings, undoMapping,
-  removeOutline, removePlaylist, updateOutline, updatePlaylist, updateOutput, updatePanel, updateSmd,
+  removeOutline, removePlaylist, saveSmdPreset, loadSmdPreset, deleteSmdPreset, updateOutline, updatePlaylist, updateOutput, updatePanel, updateSmd,
 } from '@/lib/store';
 import { summarize, type Check } from '@/lib/preflight';
 import { BAR_CHOICES, BEATS_PER_BAR, CUE_FADE_CHOICES, FADE_CHOICES } from '@/lib/transitions';
@@ -511,6 +511,18 @@ function SmdScreen({ open }: { open: boolean }) {
           {!match && <option value="custom">Custom</option>}
         </select>
       </Row>
+      <Row label="Saved screens">
+        <select value="" aria-label="Saved screens" onChange={(e) => { if (e.target.value) loadSmdPreset(e.target.value); }}>
+          <option value="">{s.smdPresets.length ? 'Load a saved screen…' : 'None saved yet'}</option>
+          {s.smdPresets.map((x) => <option key={x.name} value={x.name}>{x.name} ({x.width} × {x.height})</option>)}
+        </select>
+      </Row>
+      <div className="btns">
+        <button onClick={() => { const n = window.prompt('Name this screen (for example the venue):'); if (n && n.trim()) saveSmdPreset(n); }}>Save this screen as…</button>
+        {s.smdPresets.length > 0 && (
+          <button onClick={() => { const n = window.prompt(`Delete which saved screen?\n${s.smdPresets.map((x) => x.name).join(', ')}`); if (n && s.smdPresets.some((x) => x.name === n.trim())) deleteSmdPreset(n.trim()); }}>Delete one…</button>
+        )}
+      </div>
       <Row label="Width (px)"><PixelInput value={m.width} label="Screen width in pixels" onCommit={(v) => updateSmd({ width: v })} /></Row>
       <Row label="Height (px)"><PixelInput value={m.height} label="Screen height in pixels" onCommit={(v) => updateSmd({ height: v })} /></Row>
       <div className="btns">

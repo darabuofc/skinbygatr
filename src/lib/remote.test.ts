@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PARAM_GROUPS } from './params';
 import {
-  buildGeo, buildSnapshot, parseGeo, type StateMsg, channelName, CODE_LENGTH, makeThrottle, newSessionCode, parseToHost, parseToRemote, remoteUrl, validSessionCode,
+  buildGeo, buildSnapshot, effectiveLock, parseGeo, type StateMsg, channelName, CODE_LENGTH, makeThrottle, newSessionCode, parseToHost, parseToRemote, remoteUrl, validSessionCode,
 } from './remote';
 import { createBroadcastTransport, createMemoryPair } from './transport';
 import { codeFromLocation } from './remoteClient';
@@ -51,6 +51,23 @@ describe('snapshot', () => {
     expect(back?.s.cues[1]).toBe(SCENES[2]);
     expect(back?.s.cues[0]).toBeNull();
     expect(back?.s.params.eye.uPulse).toBe(0.3);
+  });
+  it('tells the phone when the host is driving an SMD screen, and takes mapping rights away', () => {
+    const s = defaultSettings();
+    const snap = buildSnapshot(s, false, {}, 'edit', true);
+    expect(snap).toMatchObject({ smd: true, lock: 'control' });
+    const back = parseToRemote(JSON.parse(JSON.stringify({ t: 'state', s: snap }))) as StateMsg;
+    expect(back.s).toMatchObject({ smd: true, lock: 'control' });
+    // Mapping hosts say nothing about SMD, and keep their edit right.
+    const plain = buildSnapshot(s, false, {}, 'edit');
+    expect(plain.smd).toBeUndefined();
+    expect(plain.lock).toBe('edit');
+  });
+  it('effectiveLock only ever lowers edit, and only for SMD', () => {
+    expect(effectiveLock('edit', true)).toBe('control');
+    expect(effectiveLock('edit', false)).toBe('edit');
+    expect(effectiveLock('view', true)).toBe('view');
+    expect(effectiveLock('control', true)).toBe('control');
   });
   it('rejects other versions and fixes out-of-range values', () => {
     expect(parseToRemote({ t: 'state', s: { v: 99 } })).toBeNull();

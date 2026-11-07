@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { clampSmdSize, defaultSmd, ledOf, sanitizeSmd, smdBox, smdPanel, SMD_MAX_PIXELS, SMD_MIN } from './smd';
+import { clampSmdSize, defaultSmd, ledOf, MAX_SMD_PRESETS, presetOf, sanitizePresets, sanitizeSmd, withPreset, smdBox, smdPanel, SMD_MAX_PIXELS, SMD_MIN } from './smd';
 
 const okSource = (s: unknown): s is string => s === 'gen' || (typeof s === 'string' && s.startsWith('fx:'));
 const okBand = (b: unknown) => b === 'none' || b === 'bass';
@@ -73,5 +73,30 @@ describe('LED output settings', () => {
     expect(ledOf({ ...d, maxBrightness: 0.6 })).toEqual({ cap: 0.6, gamma: 1, warmth: 0 });
     expect(ledOf({ ...d, gamma: 2.2 })).not.toBeNull();
     expect(ledOf({ ...d, warmth: 0.3 })).not.toBeNull();
+  });
+});
+
+describe('saved screens', () => {
+  const cfg = { ...defaultSmd(), width: 512, height: 512, gamma: 2, maxBrightness: 0.6 };
+  it('keep shape, fit and LED settings but not the content', () => {
+    const p = presetOf('  Club  ', { ...cfg, source: 'fx:water' });
+    expect(p).toEqual({ name: 'Club', width: 512, height: 512, fit: 'fit', maxBrightness: 0.6, gamma: 2, warmth: 0, flashLimit: 3 });
+    expect('source' in p).toBe(false);
+  });
+  it('replace a preset of the same name whatever its letter case, and drop the oldest when full', () => {
+    const a = presetOf('Club', cfg);
+    const b = presetOf('club', { ...cfg, width: 640, height: 640 });
+    expect(withPreset([a], b)).toEqual([b]);
+    expect(withPreset([a], presetOf('  ', cfg))).toEqual([a]);
+    let list = [] as ReturnType<typeof withPreset>;
+    for (let i = 0; i < MAX_SMD_PRESETS + 3; i++) list = withPreset(list, presetOf(`v${i}`, cfg));
+    expect(list).toHaveLength(MAX_SMD_PRESETS);
+    expect(list[0].name).toBe('v3');
+  });
+  it('are repaired when loaded and junk is dropped', () => {
+    const out = sanitizePresets([{ name: 'A', width: 99999, height: 'x', gamma: 99 }, null, { name: '' }, { width: 5 }, 'junk', { name: 'a', width: 300, height: 300 }], okSource, okBand);
+    expect(out).toHaveLength(1); // 'a' replaced 'A'
+    expect(out[0]).toMatchObject({ name: 'a', width: 300, height: 300 });
+    expect(sanitizePresets('nope', okSource, okBand)).toEqual([]);
   });
 });

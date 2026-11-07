@@ -690,3 +690,17 @@ describe('SMD screen settings', () => {
     expect(bad.smd.source).toBe('gen');
   });
 });
+
+describe('saved screens in the store', () => {
+  it('save, load and delete without touching what the screen shows', async () => {
+    const { saveSmdPreset, loadSmdPreset, deleteSmdPreset, updateSmd } = await import('./store');
+    updateSmd({ width: 300, height: 300, gamma: 2, source: 'fx:water' });
+    saveSmdPreset('Hall');
+    updateSmd({ width: 640, height: 480, gamma: 1, source: 'gen' });
+    loadSmdPreset('Hall');
+    expect(settings.get().smd).toMatchObject({ width: 300, height: 300, gamma: 2, source: 'gen' });
+    expect(sanitize(JSON.parse(JSON.stringify(settings.get()))).smdPresets.map((p) => p.name)).toEqual(['Hall']);
+    deleteSmdPreset('Hall');
+    expect(settings.get().smdPresets).toEqual([]);
+  });
+});

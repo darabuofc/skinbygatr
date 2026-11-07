@@ -2,7 +2,7 @@ import { outputPixelSizes, peekLoupes, runAction } from './engine';
 import { Store } from './observable';
 import { params } from './params';
 import {
-  buildGeo, buildSnapshot, channelName, HEARTBEAT_MS, LOCKS, newSessionCode, parseToHost, permits, validSessionCode, type Lock, type RemoteSnapshot, type ToHost,
+  buildGeo, buildSnapshot, channelName, effectiveLock, HEARTBEAT_MS, LOCKS, newSessionCode, parseToHost, permits, validSessionCode, type Lock, type RemoteSnapshot, type ToHost,
 } from './remote';
 import { applyEdit, resetEdits } from './remoteApply';
 import { runtime, settings } from './store';
@@ -51,7 +51,7 @@ let lastSent = '';
 let lastGeo = '';
 
 function snapshot(): RemoteSnapshot {
-  return buildSnapshot(settings.get(), runtime.get().blackout, params.get(), remoteHost.get().lock);
+  return buildSnapshot(settings.get(), runtime.get().blackout, params.get(), remoteHost.get().lock, runtime.get().mode === 'smd');
 }
 
 function sendState(force: boolean) {
@@ -87,7 +87,7 @@ function scheduleState() {
 /** Runs a checked message from a remote. */
 export function applyToHost(m: ToHost) {
   if (m.t === 'hello') { sendState(true); sendGeo(true); return; }
-  if (!permits(remoteHost.get().lock, m)) return;
+  if (!permits(effectiveLock(remoteHost.get().lock, runtime.get().mode === 'smd'), m)) return;
   if (m.t !== 'act') {
     applyEdit(m, { moved: peekLoupes, aspect: (id) => { const [w, h] = outputPixelSizes()[id] ?? [1920, 1080]; return w / Math.max(1, h); } });
     return;

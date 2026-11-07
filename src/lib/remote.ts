@@ -55,6 +55,8 @@ export interface RemoteSnapshot {
   cues: (string | null)[];
   params: ParamValues;
   lock: Lock;
+  /** The host is driving an SMD screen: there are no panels to map, so the remote hides its Map tab. */
+  smd?: boolean;
 }
 /** Host → remote: the current state, sent on change and every few seconds as a heartbeat. */
 export interface StateMsg { t: 'state'; s: RemoteSnapshot }
@@ -207,11 +209,17 @@ export function parseToRemote(raw: unknown): ToRemote | null {
       cues: Array.isArray(s.cues) ? s.cues.map((c) => (typeof c === 'string' ? c : null)) : [],
       params,
       lock: LOCKS.includes(s.lock as Lock) ? (s.lock as Lock) : 'control',
+      ...(s.smd === true ? { smd: true } : {}),
     },
   };
 }
 
-export function buildSnapshot(s: Settings, blackout: boolean, params: ParamValues, lock: Lock = 'control'): RemoteSnapshot {
+/** What a remote may really do: with an SMD screen there is no mapping to edit, whatever the setting says. */
+export function effectiveLock(lock: Lock, smd: boolean): Lock {
+  return smd && lock === 'edit' ? 'control' : lock;
+}
+
+export function buildSnapshot(s: Settings, blackout: boolean, params: ParamValues, lock: Lock = 'control', smd = false): RemoteSnapshot {
   return {
     v: REMOTE_VERSION,
     scene: s.scene,
@@ -222,7 +230,8 @@ export function buildSnapshot(s: Settings, blackout: boolean, params: ParamValue
     rgb: s.rgbSplit,
     cues: s.cues.map((c) => (c ? SCENES[c.scene] ?? 'Cue' : null)),
     params,
-    lock,
+    lock: effectiveLock(lock, smd),
+    ...(smd ? { smd: true } : {}),
   };
 }
 

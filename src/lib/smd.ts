@@ -1,4 +1,4 @@
-import type { Panel, SmdConfig, SmdFit } from './types';
+import type { Panel, SmdConfig, SmdFit, SmdPreset } from './types';
 
 /** Choices for the flash limit, in flashes per second (0 = no limit). 3 per second is the usual photosensitivity guideline. */
 export const FLASH_LIMITS = [0, 2, 3, 5] as const;
@@ -15,6 +15,36 @@ export const SMD_FITS: [SmdFit, string][] = [
   ['fit', 'Scale to fill the window'],
   ['pixel', 'True pixel size (1 pixel = 1 pixel)'],
 ];
+
+/** Most saved screen set-ups, and the longest name. */
+export const MAX_SMD_PRESETS = 12;
+export const MAX_PRESET_NAME = 32;
+
+/** A saved set-up from the screen as it is now. */
+export function presetOf(name: string, c: SmdConfig): SmdPreset {
+  return { name: name.trim().slice(0, MAX_PRESET_NAME), width: c.width, height: c.height, fit: c.fit, maxBrightness: c.maxBrightness, gamma: c.gamma, warmth: c.warmth, flashLimit: c.flashLimit };
+}
+
+/** The list with this preset added, replacing one of the same name (any letter case); the oldest goes if the list is full. */
+export function withPreset(list: SmdPreset[], p: SmdPreset): SmdPreset[] {
+  if (!p.name) return list;
+  const i = list.findIndex((x) => x.name.toLowerCase() === p.name.toLowerCase());
+  if (i >= 0) return list.map((x, j) => (j === i ? p : x));
+  return [...list, p].slice(-MAX_SMD_PRESETS);
+}
+
+/** Valid presets from saved data: each is passed through the same repairs as the live screen. */
+export function sanitizePresets(v: unknown, validSource: (s: unknown) => s is string, validBand: (b: unknown) => boolean): SmdPreset[] {
+  if (!Array.isArray(v)) return [];
+  let out: SmdPreset[] = [];
+  for (const x of v) {
+    if (!x || typeof x !== 'object' || typeof (x as { name?: unknown }).name !== 'string') continue;
+    const name = (x as { name: string }).name.trim().slice(0, MAX_PRESET_NAME);
+    if (!name) continue;
+    out = withPreset(out, presetOf(name, sanitizeSmd(x, validSource, validBand)));
+  }
+  return out;
+}
 
 /** Common LED sizes, to start from. Anything else is typed in. */
 export const SMD_PRESETS: { name: string; width: number; height: number }[] = [

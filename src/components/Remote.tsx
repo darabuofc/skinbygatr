@@ -68,14 +68,14 @@ export default function Remote() {
       </header>
 
       <div className="rtabs" role="tablist">
-        {([['perform', 'Perform'], ['map', 'Map']] as const).map(([id, name]) => (
+        {([['perform', 'Perform'], ['map', 'Map']] as const).filter(([id]) => id !== 'map' || !s?.smd).map(([id, name]) => (
           <button key={id} role="tab" aria-selected={tab === id} className={tab === id ? 'on' : ''} onClick={() => setTab(id)}>{name}</button>
         ))}
       </div>
 
-      {tab === 'map' && <RemoteMap canEdit={live && s?.lock === 'edit'} />}
+      {tab === 'map' && !s?.smd && <RemoteMap canEdit={live && s?.lock === 'edit'} />}
 
-      {tab === 'perform' && <>
+      {(tab === 'perform' || !!s?.smd) && <>
       <div className="rtop">
         <button className={`big${s?.blackout ? ' on' : ''}`} disabled={!ctl} onClick={() => act('blackout')}>
           {s?.blackout ? 'Blackout ON' : 'Blackout'}
