@@ -25,6 +25,9 @@ export default function ModeGate() {
             {last === 'mapping' && <small>Used last time</small>}
           </button>
         </div>
+        <button className="gate-auto" onClick={() => { E.setMode(last ?? 'mapping'); E.connectAutopilot(); }}>
+          <strong>Autopilot</strong> Connect audio and let the show run itself ({last === 'smd' ? 'SMD screen' : 'mapping'})
+        </button>
         <p className="gate-note">You can switch any time from Setup. Your mapping and your SMD screen are kept separately.</p>
       </div>
     </div>

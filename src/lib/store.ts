@@ -1,3 +1,4 @@
+import { defaultAutopilot, sanitizeAutopilot } from './autopilot';
 import { SPLIT_DRIVES, type SplitDrive } from './effects';
 import { isFxSource } from './fx';
 import { MapHistory } from './history';
@@ -64,6 +65,7 @@ export function defaultSettings(): Settings {
     selected: 0,
     scene: 0,
     autoCycle: false,
+    autopilot: defaultAutopilot(),
     cycleBars: 8,
     fadeBeats: 2,
     cueFade: 3,
@@ -279,6 +281,7 @@ export function sanitize(raw: unknown): Settings {
     selected: 0,
     scene: Math.round(num(o.scene, 0, SCENES.length - 1, 0)),
     autoCycle: o.autoCycle === true,
+    autopilot: sanitizeAutopilot(o.autopilot),
     cycleBars: pick(BAR_CHOICES, o.cycleBars, barsFromSeconds(o.cycleSec, o.bpm) ?? d.cycleBars),
     fadeBeats: pick(FADE_CHOICES, o.fadeBeats, d.fadeBeats),
     cueFade: pick(CUE_FADE_CHOICES, o.cueFade, d.cueFade),
@@ -322,6 +325,10 @@ export const runtime = new Store<Runtime>({
   mode: 'choose',
   showMode: false,
   blackout: false,
+  apSection: 'ambient',
+  apBarsLeft: 0,
+  apHeld: false,
+  apPaused: false,
   flashHold: false,
   outputOpen: false,
   openOutputs: [],
@@ -486,6 +493,18 @@ export function updatePlaylist(i: number, patch: Partial<PanelPlaylist>) {
       return next ? { ...p, playlist: next } : p;
     }),
   }));
+}
+
+/** Changes the SMD screen's slideshow, giving it an empty one first if it had none. */
+export function updateSmdPlaylist(patch: Partial<PanelPlaylist>) {
+  settings.set((s) => {
+    const next = sanitizePlaylist({ ...(s.smd.playlist ?? defaultPlaylist()), ...patch });
+    return next ? { smd: { ...s.smd, playlist: next } } : {};
+  });
+}
+
+export function removeSmdPlaylist() {
+  settings.set((s) => { const { playlist: _pl, ...rest } = s.smd; return { smd: rest }; });
 }
 
 export function removePlaylist(i: number) {

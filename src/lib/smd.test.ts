@@ -100,3 +100,15 @@ describe('saved screens', () => {
     expect(sanitizePresets('nope', okSource, okBand)).toEqual([]);
   });
 });
+
+describe('SMD slideshow', () => {
+  it('is kept when loaded, with its hard-cut choice, and absent by default', () => {
+    expect(defaultSmd().playlist).toBeUndefined();
+    const s = sanitizeSmd({ playlist: { items: ['vid:a', 'img:b', 'bad'], beats: 0.5, cut: true, order: 'shuffle' } }, okSource, okBand);
+    expect(s.playlist).toEqual({ on: true, items: ['vid:a', 'img:b'], beats: 0.5, order: 'shuffle', cut: true });
+  });
+  it('is not saved in a screen preset', () => {
+    const p = presetOf('x', sanitizeSmd({ playlist: { items: ['vid:a'] } }, okSource, okBand));
+    expect('playlist' in p).toBe(false);
+  });
+});

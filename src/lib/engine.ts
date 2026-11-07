@@ -1,22 +1,23 @@
 import { AudioEngine, SILENCE_SEC } from './audio';
 import { splitOffset } from './effects';
-import { fitImageSize } from './fx';
+import { FX, fitImageSize } from './fx';
 import { deleteImage, deleteVideo, listImages, listVideos, putImage, putVideo, type ImageRecord, type VideoRecord } from './library';
 import { FrameGuard } from './loop';
 import { MidiEngine, type MidiMessage } from './midi';
 import { postActive, postGroupId, type PostValues } from './post';
+import { Autopilot, type ApChange, type ApFrame } from './autopilot';
 import { EyeAutomation } from './automation';
 import {
   allActions, ParamSmoother, params, parseParamAction, parseTriggerAction, resetParams, sanitizeParams, setParamFromFader,
 } from './params';
 import { Output } from './output';
-import { nextSource, PlaylistCounter } from './playlist';
+import { nextSource, PlaylistCounter, SubBeatClock } from './playlist';
 import { runChecks, type PreflightInput } from './preflight';
 import {
   BarCounter, beatPeriod, Crossfade, glideAt, MAX_CUE_FADE_SEC, MAX_FADE_SEC, needsFade, type Glide, type WallLook,
 } from './transitions';
 import { Renderer, type FrameInput } from './renderer';
-import { ledOf, smdPanel } from './smd';
+import { ledOf, SMD_PANEL_ID, smdPanel } from './smd';
 import { FlashLimiter } from './strobe';
 import { mainView, pickDriver, windowName } from './surfaces';
 import {
@@ -66,6 +67,14 @@ let lastT = 0;
 /** Kicks towards the next automatic scene change. */
 const bars = new BarCounter();
 const playlistBeats = new PlaylistCounter();
+const director = new Autopilot(Date.now() & 0xffff);
+let apWasOn = false;
+/** The user's own transition, put back when autopilot is switched off. */
+let apUserTransition: Settings['transition'] | null = null;
+let apFrame: ApFrame | null = null;
+const subBeats = new SubBeatClock();
+/** Set while a slideshow step that should cut (not fade) is being applied. */
+let hardCut = false;
 const fader = new Crossfade();
 /** What the wall is showing (or fading to), to fade from on the next change. */
 let shown: WallLook | null = null;
@@ -332,13 +341,14 @@ function drawFrame() {
   live.set('eye.uWanderY', eye.y);
   phaseA += dt * (0.12 + L.mid * 1.2);
   phaseB += dt * (0.2 + L.bass * 1.5);
-  if (!s.autoCycle) bars.reset();
+  runAutopilot(s, r, L, t, dt);
+  if (!s.autoCycle || s.autopilot.on) bars.reset();
   else if (L.kick && bars.kick(s.cycleBars)) {
     autoChanging = true;
     setScene((s.scene + 1) % SCENES.length);
     autoChanging = false;
   }
-  stepPlaylists(s, L.kick);
+  stepPlaylists(s, r.mode === 'smd', L.kick, Math.max(0, rawDt));
   const mix = fader.mix(t);
   const from = mix !== null ? fader.from : null;
   // Everything but the panels and flip is the same for every projector: one clock, one look.
@@ -350,9 +360,9 @@ function drawFrame() {
     span: s.span,
     testGrid: s.testGrid,
     blackout: r.blackout,
-    flash: flashLimiter.update(r.flashHold ? 1 : s.strobe ? L.kickEnv * 0.85 : 0, t, r.mode === 'smd' ? s.smd.flashLimit : 0),
+    flash: flashLimiter.update(r.flashHold ? 1 : s.strobe || apFrame?.strobe ? L.kickEnv * 0.85 : 0, t, r.mode === 'smd' ? s.smd.flashLimit : s.autopilot.on ? 3 : 0),
     master: s.master,
-    split: r.blackout ? 0 : splitOffset(L, s.rgbSplit, s.rgbDrive),
+    split: r.blackout ? 0 : splitOffset(L, Math.max(s.rgbSplit, apFrame?.split ?? 0), s.rgbDrive),
     react: s.react,
     levelFor,
     getVideo: (id) => videoEls.get(id)?.el ?? null,
@@ -423,23 +433,116 @@ function withoutItem(p: Panel, source: string): Panel {
   return p.playlist?.items.includes(source) ? { ...p, playlist: { ...p.playlist, items: p.playlist.items.filter((x) => x !== source) } } : p;
 }
 
-/** On a kick, moves each panel with a running playlist on to its next item once its beats are up; one settings change, so one fade. */
-function stepPlaylists(s: Settings, kick: boolean) {
-  const running = s.panels.filter((p) => p.playlist?.on && p.playlist.items.length > 1);
-  playlistBeats.keepOnly(new Set(running.map((p) => p.id)));
-  if (!kick) return;
-  const due = new Map<string, string>();
-  for (const p of running) {
-    const pl = p.playlist!;
-    if (playlistBeats.kick(p.id, pl.beats)) due.set(p.id, nextSource(pl, p.source));
+/** The SMD screen with a removed library item gone from what it shows and from its slideshow. */
+function smdWithout(m: Settings['smd'], source: string): Settings['smd'] {
+  const next = m.source === source ? { ...m, source: 'gen' } : m;
+  return next.playlist?.items.includes(source) ? { ...next, playlist: { ...next.playlist, items: next.playlist.items.filter((x) => x !== source) } } : next;
+}
+
+/**
+ * Moves each running slideshow on to its next item once its beats are up (the panels in mapping mode, the
+ * screen's own in SMD mode). A beat or more is counted in kicks; a half or quarter beat is timed from the tempo.
+ * All changes from one frame are one settings change, so one fade, or none when every one of them cuts.
+ */
+function stepPlaylists(s: Settings, smd: boolean, kick: boolean, dt: number) {
+  const runners = smd
+    ? (s.smd.playlist?.on && s.smd.playlist.items.length > 1 ? [{ id: SMD_PANEL_ID, pl: s.smd.playlist, source: s.smd.source }] : [])
+    : s.panels.filter((p) => p.playlist?.on && p.playlist.items.length > 1).map((p) => ({ id: p.id, pl: p.playlist!, source: p.source }));
+  const live = new Set(runners.map((q) => q.id));
+  playlistBeats.keepOnly(live);
+  subBeats.keepOnly(live);
+  if (!runners.length) return;
+  const period = beatPeriod(audio.L.kicks, s.bpm);
+  const due = new Map<string, { src: string; cut: boolean }>();
+  for (const q of runners) {
+    const fire = q.pl.beats < 1 ? subBeats.tick(q.id, dt, kick, q.pl.beats, period) : kick && playlistBeats.kick(q.id, q.pl.beats);
+    if (fire) due.set(q.id, { src: nextSource(q.pl, q.source), cut: q.pl.cut });
   }
-  if (due.size) settings.set((cur) => ({ panels: cur.panels.map((p) => (due.has(p.id) ? { ...p, source: due.get(p.id)! } : p)) }));
+  if (!due.size) return;
+  hardCut = [...due.values()].every((d) => d.cut);
+  autoChanging = true;
+  try {
+    settings.set((cur) => (smd
+      ? { smd: { ...cur.smd, source: due.get(SMD_PANEL_ID)!.src } }
+      : { panels: cur.panels.map((p) => (due.has(p.id) ? { ...p, source: due.get(p.id)!.src } : p)) }));
+  } finally { hardCut = false; autoChanging = false; }
+}
+
+/* ---------- autopilot ---------- */
+
+/** Sources the director may give a panel: built-in shaders that work without extra pictures. */
+const AP_FX = FX.filter((f) => !f.textures?.length && f.id !== 'eye').map((f) => `fx:${f.id}`);
+
+function runAutopilot(s: Settings, r: ReturnType<typeof runtime.get>, L: typeof audio.L, t: number, dt: number) {
+  const ap = s.autopilot;
+  if (!ap.on) {
+    if (apWasOn) {
+      apWasOn = false;
+      director.reset();
+      if (apUserTransition) settings.set({ transition: apUserTransition });
+      apUserTransition = null;
+    }
+    if (apFrame) { apFrame = null; runtime.set({ apSection: 'ambient', apBarsLeft: 0, apPaused: false }); }
+    return;
+  }
+  if (!apWasOn) { apWasOn = true; director.reset(); apUserTransition = s.transition; }
+  const smd = r.mode === 'smd';
+  const panels = smd
+    ? (s.smd.playlist?.on && s.smd.playlist.items.length > 1 ? [] : [{ id: SMD_PANEL_ID, source: s.smd.source }])
+    : s.panels.filter((p) => !p.playlist?.on).map((p) => ({ id: p.id, source: p.source }));
+  director.held = r.apHeld;
+  const f = director.step({
+    t, dt, kick: L.kick, since: L.since, bass: L.bass, mid: L.mid, high: L.high,
+    period: beatPeriod(L.kicks, s.bpm), sceneCount: SCENES.length, scene: s.scene,
+    videos: r.videos.map((v) => `vid:${v.id}`), builtin: ['gen', ...AP_FX],
+    panels, live: r.audioState === 'listening', pool: ap.pool, intensity: ap.intensity,
+  });
+  if (!ap.strobe) f.strobe = false;
+  apFrame = f;
+  if (f.change) applyApChange(f.change, smd);
+  const paused = !f.active;
+  if (f.section !== r.apSection || paused !== r.apPaused || Math.round(f.barsLeft) !== r.apBarsLeft) {
+    runtime.set({ apSection: f.section, apPaused: paused, apBarsLeft: Math.round(f.barsLeft) });
+  }
+}
+
+function applyApChange(c: ApChange, smd: boolean) {
+  autoChanging = true;
+  try {
+    settings.set((cur) => ({
+      scene: c.scene, c1: c.c1, c2: c.c2, transition: c.transition,
+      ...(smd
+        ? (c.sources[SMD_PANEL_ID] ? { smd: { ...cur.smd, source: c.sources[SMD_PANEL_ID] } } : {})
+        : { panels: cur.panels.map((p) => (c.sources[p.id] ? { ...p, source: c.sources[p.id] } : p)) }),
+    }));
+  } finally { autoChanging = false; }
+}
+
+export function setAutopilot(on: boolean) {
+  settings.set((s) => ({ autopilot: { ...s.autopilot, on } }));
+  if (!on) runtime.set({ apHeld: false });
+}
+
+export function setAutopilotConfig(patch: Partial<Settings['autopilot']>) {
+  settings.set((s) => ({ autopilot: { ...s.autopilot, ...patch } }));
+}
+
+export function toggleAutopilotHold() { runtime.set((r) => ({ apHeld: !r.apHeld })); }
+
+/**
+ * One-click start: listens to the audio input (needs this click), goes to show mode and switches the
+ * director on. If the input can't be reached the visuals run on the built-in beat and say so.
+ */
+export async function connectAutopilot() {
+  if (!runtime.get().audioOn) await startAudio();
+  if (!runtime.get().showMode) toggleShow();
+  setAutopilot(true);
 }
 
 /* ---------- scene transitions ---------- */
 
 function lookOf(s: Settings): WallLook {
-  return { scene: s.scene, c1: s.c1, c2: s.c2, sources: Object.fromEntries(s.panels.map((p) => [p.id, p.source])) };
+  return { scene: s.scene, c1: s.c1, c2: s.c2, sources: { ...Object.fromEntries(s.panels.map((p) => [p.id, p.source])), [SMD_PANEL_ID]: s.smd.source } };
 }
 
 /** Starts a crossfade when the scene or a panel's content changes, and restarts the bar count on manual changes. */
@@ -447,7 +550,11 @@ function lookChanged(s: Settings) {
   const next = lookOf(s);
   const prev = shown ?? next;
   if (next.scene !== prev.scene && !autoChanging) bars.reset();
-  if (needsFade(prev, next)) {
+  // A scene, cue or content change by hand: autopilot steps back for a while.
+  if (!autoChanging && settings.get().autopilot.on && (next.scene !== prev.scene || JSON.stringify(next.sources) !== JSON.stringify(prev.sources))) {
+    director.manual(performance.now() / 1000);
+  }
+  if (needsFade(prev, next) && !(hardCut && prev.scene === next.scene)) {
     const t = performance.now() / 1000;
     // Changed again mid-fade: start from whichever look is mostly on the wall right now.
     const mix = fader.mix(t);
@@ -784,7 +891,7 @@ export async function removeVideo(id: string) {
   runtime.set((r) => ({ videos: r.videos.filter((x) => x.id !== id) }));
   settings.set((s) => ({
     panels: s.panels.map((p) => withoutItem(p.source === `vid:${id}` ? { ...p, source: 'gen' } : p, `vid:${id}`)),
-    smd: s.smd.source === `vid:${id}` ? { ...s.smd, source: 'gen' } : s.smd,
+    smd: smdWithout(s.smd, `vid:${id}`),
   }));
   updateStorage();
 }
@@ -869,7 +976,7 @@ export async function removeImage(id: string) {
   runtime.set((r) => ({ images: r.images.filter((x) => x.id !== id) }));
   settings.set((s) => ({
     panels: s.panels.map((p) => withoutItem(p.source === `img:${id}` ? { ...p, source: 'gen' } : p, `img:${id}`)),
-    smd: s.smd.source === `img:${id}` ? { ...s.smd, source: 'gen' } : s.smd,
+    smd: smdWithout(s.smd, `img:${id}`),
   }));
   settings.set((s) => ({
     panels: s.panels.map((p) => {
@@ -893,6 +1000,9 @@ export function runAction(id: string, value = 0) {
   else if (id === 'master') settings.set({ master: value });
   else if (id === 'react') settings.set({ react: value });
   else if (id === 'rgb') settings.set({ rgbSplit: value });
+  else if (id === 'autopilot') setAutopilot(!settings.get().autopilot.on);
+  else if (id === 'autopilot:hold') toggleAutopilotHold();
+  else if (id === 'autopilot:intensity') setAutopilotConfig({ intensity: value });
   else {
     const pa = parseParamAction(id);
     if (pa) setParamFromFader(pa.fx, pa.name, value);

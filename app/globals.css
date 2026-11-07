@@ -209,3 +209,7 @@ section .params + .params { margin-top: 12px; }
 @media (max-width: 640px) { .gate-cards { grid-template-columns: 1fr; } .gate-card { min-height: 0; } }
 button.link { background: none; border: 0; padding: 0; color: var(--amber); font: inherit; font-size: 13px; cursor: pointer; text-decoration: underline; }
 .sub-h { font-size: 13px; font-weight: 600; color: var(--muted); margin: 14px 0 6px; text-transform: uppercase; letter-spacing: .04em; }
+
+.gate-auto { display: block; width: 100%; margin-top: 16px; padding: 16px 20px; background: transparent; border: 1.5px dashed var(--amber); border-radius: 12px; color: var(--ink); font: inherit; font-size: 14.5px; cursor: pointer; }
+.gate-auto strong { font-size: 18px; margin-right: 8px; }
+.gate-auto:hover, .gate-auto:focus-visible { background: var(--raise); outline: none; }

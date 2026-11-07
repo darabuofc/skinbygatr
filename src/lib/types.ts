@@ -1,3 +1,4 @@
+import type { ApConfig } from './autopilot';
 import type { SplitDrive } from './effects';
 
 export type Band = 'bass' | 'mid' | 'high' | 'all' | 'none';
@@ -60,6 +61,8 @@ export interface PanelPlaylist {
   /** Beats between changes. */
   beats: number;
   order: 'seq' | 'shuffle';
+  /** Change with a hard cut instead of the crossfade. Wanted for steps shorter than the fade, such as half and quarter beats. */
+  cut: boolean;
 }
 
 export type OutlineStyle = 'chase' | 'dashes' | 'pulse' | 'rainbow' | 'flicker';
@@ -214,6 +217,8 @@ export interface SmdConfig {
   warmth: number;
   /** Most full-screen flashes per second (strobe and held flash); 0 means no limit. */
   flashLimit: number;
+  /** A slideshow for the screen's content: steps through videos and pictures on the beat. Missing means none. */
+  playlist?: PanelPlaylist;
 }
 
 /** A venue's screen set-up, saved by name: its shape, fit and LED corrections. Content is chosen per show, not saved. */
@@ -230,6 +235,8 @@ export interface Settings {
   selected: number;
   scene: number;
   autoCycle: boolean;
+  /** Autopilot: the director that runs scenes, content, colours and effects from the sound. */
+  autopilot: ApConfig;
   /** Automatic scene changes happen every this many bars, counted in kicks. */
   cycleBars: number;
   /** Crossfade length for scene changes and cue recalls, in beats (0 = hard cut). */
@@ -267,6 +274,11 @@ export interface Runtime {
   mode: AppMode;
   showMode: boolean;
   blackout: boolean;
+  /** What autopilot is doing, for the readout. */
+  apSection: string;
+  apBarsLeft: number;
+  apHeld: boolean;
+  apPaused: boolean;
   flashHold: boolean;
   /** At least one projector window is open. */
   outputOpen: boolean;
@@ -339,6 +351,9 @@ export const ACTIONS: Action[] = [
   { id: 'blackout', label: 'Blackout on/off', type: 'trigger' },
   { id: 'flash', label: 'Flash while held', type: 'hold' },
   { id: 'tap', label: 'Tap tempo', type: 'trigger' },
+  { id: 'autopilot', label: 'Autopilot on/off', type: 'trigger' },
+  { id: 'autopilot:hold', label: 'Autopilot hold on/off', type: 'trigger' },
+  { id: 'autopilot:intensity', label: 'Autopilot intensity', type: 'fader' },
   ...Array.from({ length: CUE_COUNT }, (_, i) => ({ id: `cue:${i}`, label: `Recall cue ${i + 1}`, type: 'trigger' as const })),
   { id: 'master', label: 'Master brightness', type: 'fader' },
   { id: 'react', label: 'Reactivity', type: 'fader' },

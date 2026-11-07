@@ -244,6 +244,7 @@ src/lib/mask.ts      Freeform masks: outline curves, point insertion, validation
 src/lib/trace.ts     Masks from pictures: exact picture masks and silhouette tracing to ≤48 points (tested)
 src/lib/text.ts      Panel text: fit-to-panel sizing and rotation, drawn to a bitmap the panel shader overlays (tested)
 src/lib/effects.ts   Audio-driven panel effects: RGB split amount and direction (tested)
+src/lib/autopilot.ts Autopilot director: reads the sound (ambient, groove, build, drop, breakdown) and picks scenes, content, colours, transitions, RGB split and drop flashes on the bar grid (tested)
 src/lib/remote.ts    Remote protocol: checked actions, state snapshot, pairing code, fader throttle (tested)
 src/lib/transport.ts Message pipe for the remote: Ably between devices, BroadcastChannel between tabs (tested)
 src/lib/remoteHost.ts / remoteClient.ts  The Mac's side (applies actions, reports state and mapping, enforces the lock) and the phone's side
@@ -279,3 +280,12 @@ at the same spot on the wall; arrow nudges step in projector pixels.
   back to the control window.
 - Private browsing blocks the video library.
 - Generated scenes render at 1920×1080; videos render at their native resolution.
+
+## Autopilot
+
+Perform tab, Autopilot (or the Autopilot button on the startup screen): connects the audio input, goes to
+show mode and lets the director run the show. Content is your videos, the built-in visuals, or both.
+Intensity sets how often it changes and how heavy the effects are; drop flashes are optional and capped at
+3 a second. Panels with their own playlist are left alone. A scene, content or cue change by hand pauses it
+for 20 seconds; Hold freezes it. It overwrites panel content and colours as it goes, so save a cue first.
+Also on the phone remote and as MIDI actions (on/off, hold, intensity).

@@ -88,6 +88,9 @@ export default function Remote() {
         >
           Flash (hold)
         </button>
+        <button className={`big${s?.ap ? ' on' : ''}`} disabled={!ctl} aria-pressed={!!s?.ap} onClick={() => act('autopilot')}>
+          {s?.ap ? 'Autopilot ON' : 'Autopilot'}
+        </button>
         <button className="big" disabled={!ctl} onClick={() => act('tap')}>Tap{s ? ` · ${Math.round(s.bpm)}` : ''}</button>
       </div>
 

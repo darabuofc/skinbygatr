@@ -6,8 +6,8 @@ import type { PanelPlaylist } from './types';
  * Settings and the stepping rule are pure and tested here; the engine feeds it kicks.
  */
 
-/** Beats between changes. 1 beat = every kick; a bar is 4 beats. */
-export const PLAYLIST_BEAT_CHOICES = [1, 2, 4, 8, 16, 32] as const;
+/** Beats between changes. 1 beat = every kick; a bar is 4 beats. Under 1 the steps are timed from the tempo, not counted from kicks. */
+export const PLAYLIST_BEAT_CHOICES = [0.25, 0.5, 1, 2, 4, 8, 16, 32] as const;
 export const MAX_PLAYLIST_ITEMS = 16;
 export const PLAYLIST_ORDERS: [PanelPlaylist['order'], string][] = [
   ['seq', 'In order'],
@@ -17,7 +17,7 @@ export const PLAYLIST_ORDERS: [PanelPlaylist['order'], string][] = [
 const isMedia = (v: unknown): v is string => typeof v === 'string' && (v.startsWith('vid:') || v.startsWith('img:'));
 
 export function defaultPlaylist(): PanelPlaylist {
-  return { on: true, items: [], beats: 4, order: 'seq' };
+  return { on: true, items: [], beats: 4, order: 'seq', cut: false };
 }
 
 /** A valid playlist, or null when there isn't one to apply. */
@@ -31,6 +31,7 @@ export function sanitizePlaylist(v: unknown): PanelPlaylist | null {
     items,
     beats: PLAYLIST_BEAT_CHOICES.find((b) => b === o.beats) ?? d.beats,
     order: o.order === 'shuffle' ? 'shuffle' : 'seq',
+    cut: o.cut === true,
   };
 }
 
@@ -66,4 +67,33 @@ export class PlaylistCounter {
 
   /** Forget every panel whose id isn't in `live`. */
   keepOnly(live: Set<string>) { for (const id of [...this.beats.keys()]) if (!live.has(id)) this.beats.delete(id); }
+}
+
+/**
+ * Times playlist steps shorter than a beat (a half or quarter beat) from the tempo. A kick restarts
+ * the count, so the steps stay locked to the music, and the first step lands on the kick; between
+ * kicks, and when there are none at all, the steps carry on at the tempo. A step never follows
+ * another closer than 60% of its length, so a timer step just before a kick doesn't fire twice.
+ */
+export class SubBeatClock {
+  private state = new Map<string, { acc: number; since: number }>();
+
+  /** Call every frame for a panel with a running playlist. `every` is in beats, `period` is seconds per beat. True when a step is due. */
+  tick(id: string, dt: number, kick: boolean, every: number, period: number): boolean {
+    const step = Math.max(0.02, every * period);
+    let s = this.state.get(id);
+    if (!s) { s = { acc: 0, since: step }; this.state.set(id, s); }
+    s.acc += dt;
+    s.since += dt;
+    let due = false;
+    if (kick) { s.acc = 0; due = true; }
+    else if (s.acc >= step) { s.acc %= step; due = true; }
+    if (due && s.since < step * 0.6) due = false;
+    if (due) s.since = 0;
+    return due;
+  }
+
+  reset(id: string) { this.state.delete(id); }
+
+  keepOnly(live: Set<string>) { for (const id of [...this.state.keys()]) if (!live.has(id)) this.state.delete(id); }
 }

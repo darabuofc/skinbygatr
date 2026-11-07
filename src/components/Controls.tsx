@@ -4,7 +4,7 @@ import * as E from '@/lib/engine';
 import { useStore } from '@/lib/hooks';
 import {
   addMask, addOutput, addPanel, clearCue, removeMask, setImageMask, setMaskSmooth, setTracedMask, setMeshSize, setPanelInput, updateMask, deletePanel, layerTarget, movePanelLayer, movePanelToOutput, recallCue, removeOutput, redoMapping, runtime, saveCue, selectPanel, setScene, settings, undoMapping,
-  removeOutline, removePlaylist, saveSmdPreset, loadSmdPreset, deleteSmdPreset, updateOutline, updatePlaylist, updateOutput, updatePanel, updateSmd,
+  removeOutline, removePlaylist, removeSmdPlaylist, updateSmdPlaylist, saveSmdPreset, loadSmdPreset, deleteSmdPreset, updateOutline, updatePlaylist, updateOutput, updatePanel, updateSmd,
 } from '@/lib/store';
 import { summarize, type Check } from '@/lib/preflight';
 import { BAR_CHOICES, BEATS_PER_BAR, CUE_FADE_CHOICES, FADE_CHOICES } from '@/lib/transitions';
@@ -22,6 +22,7 @@ import { MAX_OUTLINE_RUNNERS, MAX_OUTLINE_SPEED, MAX_OUTLINE_WIDTH, OUTLINE_SYNC
 import { bakeMaskImage, traceImage, type TraceFit } from '@/lib/trace';
 import { MESH_SIZES } from '@/lib/mesh';
 import { MAX_PLAYLIST_ITEMS, PLAYLIST_BEAT_CHOICES, PLAYLIST_ORDERS } from '@/lib/playlist';
+import { POOLS, type ApPool } from '@/lib/autopilot';
 import { FLASH_LIMITS, SMD_FITS, SMD_PRESETS } from '@/lib/smd';
 import RemotePanel from './RemotePanel';
 
@@ -87,6 +88,7 @@ function Help({ children, label = 'How this works' }: { children?: ReactNode; la
   );
 }
 
+const AP_SECTION: Record<string, string> = { ambient: 'quiet or no sound', groove: 'a steady groove', build: 'a build', drop: 'a drop', breakdown: 'a breakdown' };
 const pct = (v: number) => `${Math.round(v * 100)}%`;
 
 type Tab = 'perform' | 'setup';
@@ -324,16 +326,16 @@ function PanelMask({ index, mask, editing }: { index: number; mask?: Mask; editi
 }
 
 /** The selected panel's slideshow: its own videos and pictures, changed every few beats. */
-function PanelPlaylistControls({ index, playlist, name }: { index: number; playlist?: PanelPlaylist; name: (src: string) => string }) {
+function PanelPlaylistControls({ playlist, name, onSet, onRemove }: { playlist?: PanelPlaylist; name: (src: string) => string; onSet: (patch: Partial<PanelPlaylist>) => void; onRemove: () => void }) {
   const r = useStore(runtime);
   if (!playlist) {
     return (
       <Row label="Slideshow">
-        <button onClick={() => updatePlaylist(index, {})}>Add slideshow</button>
+        <button onClick={() => onSet({})}>Add slideshow</button>
       </Row>
     );
   }
-  const set = (patch: Partial<PanelPlaylist>) => updatePlaylist(index, patch);
+  const set = onSet;
   const library = [...r.videos.map((v) => `vid:${v.id}`), ...r.images.map((im) => `img:${im.id}`)];
   const addable = library.filter((src) => !playlist.items.includes(src));
   const move = (i: number, d: number) => {
@@ -348,13 +350,24 @@ function PanelPlaylistControls({ index, playlist, name }: { index: number; playl
       <Row label="Slideshow">
         <span className="btns">
           <button className={playlist.on ? 'on' : ''} aria-pressed={playlist.on} onClick={() => set({ on: !playlist.on })}>{playlist.on ? 'On' : 'Off'}</button>
-          <button onClick={() => removePlaylist(index)}>Remove</button>
+          <button onClick={onRemove}>Remove</button>
         </span>
       </Row>
       <Row label="Change every">
-        <select value={playlist.beats} onChange={(e) => set({ beats: +e.target.value })}>
-          {PLAYLIST_BEAT_CHOICES.map((b) => <option key={b} value={b}>{b} {b === 1 ? 'beat' : 'beats'}{b % BEATS_PER_BAR === 0 ? ` (${b / BEATS_PER_BAR} ${b === BEATS_PER_BAR ? 'bar' : 'bars'})` : ''}</option>)}
+        <select value={playlist.beats} onChange={(e) => {
+          const beats = +e.target.value;
+          // Steps shorter than a beat would blur into mush through a crossfade, so they start as hard cuts.
+          set(beats < 1 && playlist.beats >= 1 ? { beats, cut: true } : { beats });
+        }}>
+          {PLAYLIST_BEAT_CHOICES.map((b) => (
+            <option key={b} value={b}>
+              {b === 0.25 ? '¼ beat' : b === 0.5 ? '½ beat' : `${b} ${b === 1 ? 'beat' : 'beats'}`}{b >= BEATS_PER_BAR && b % BEATS_PER_BAR === 0 ? ` (${b / BEATS_PER_BAR} ${b === BEATS_PER_BAR ? 'bar' : 'bars'})` : ''}
+            </option>
+          ))}
         </select>
+      </Row>
+      <Row label="Change with a hard cut">
+        <input type="checkbox" checked={playlist.cut} onChange={(e) => set({ cut: e.target.checked })} />
       </Row>
       <Row label="Order">
         <select value={playlist.order} onChange={(e) => set({ order: e.target.value as PanelPlaylist['order'] })}>
@@ -379,7 +392,7 @@ function PanelPlaylistControls({ index, playlist, name }: { index: number; playl
           </select>
         </Row>
       )}
-      <Help>The panel moves to the next item on a kick, counting from when you turn it on. It needs at least two items. Changes use the crossfade and transition above, so set Crossfade shorter than the step, or Off for hard cuts on the beat. Videos you remove from the library leave the list.</Help>
+      <Help>A beat or more: the next item comes on a kick, counting from when you turn it on. Half and quarter beats are timed from the tempo and restart on every kick, so they stay with the music and keep going if the kick drops out. It needs at least two items. Without “hard cut” a change uses the crossfade and transition under Visuals, which smears fast steps together, so keep it on for half and quarter beats. Very fast cuts of a bright picture can read as a strobe. Videos you remove from the library leave the list.</Help>
     </>
   );
 }
@@ -547,6 +560,15 @@ function SmdScreen({ open }: { open: boolean }) {
           {BANDS.map(([v, n]) => <option key={v} value={v}>{n}</option>)}
         </select>
       </Row>
+      <PanelPlaylistControls
+        playlist={m.playlist}
+        name={(x) => {
+          if (x.startsWith('img:')) return r.images.find((im) => `img:${im.id}` === x)?.name ?? 'Missing picture';
+          return r.videos.find((v) => `vid:${v.id}` === x)?.name ?? 'Missing video';
+        }}
+        onSet={updateSmdPlaylist}
+        onRemove={removeSmdPlaylist}
+      />
       <Row label="Test grid (G)">
         <input type="checkbox" checked={s.testGrid} onChange={(e) => settings.set({ testGrid: e.target.checked })} />
       </Row>
@@ -813,7 +835,7 @@ export default function Controls({ hidden }: { hidden: boolean }) {
             </Row>
             <Help>Panels lower in the list draw on top of earlier ones on the same projector. Add and Screen brighten what’s beneath (light on light), Multiply darkens it (shadows and tints). The test grid shows every panel as Normal.</Help>
             <PanelMask index={s.selected} mask={p.mask} editing={r.maskEdit} />
-            <PanelPlaylistControls index={s.selected} playlist={p.playlist} name={sourceName} />
+            <PanelPlaylistControls playlist={p.playlist} name={sourceName} onSet={(patch) => updatePlaylist(s.selected, patch)} onRemove={() => removePlaylist(s.selected)} />
             <PanelOutline index={s.selected} outline={p.outline} hasMask={!!p.mask && !p.mask.image} />
             <PanelText index={s.selected} label={p.label} />
           </>
@@ -826,6 +848,32 @@ export default function Controls({ hidden }: { hidden: boolean }) {
       </>}
 
       {tab === 'perform' && <>
+      <Section id="autopilot" title={'Autopilot'} badge={s.autopilot.on ? ' · on' : undefined}>
+        <div className="btns">
+          <button className={s.autopilot.on ? 'on' : ''} aria-pressed={s.autopilot.on} onClick={() => (s.autopilot.on ? E.setAutopilot(false) : E.connectAutopilot())}>
+            {s.autopilot.on ? 'Autopilot on: click to stop' : 'Connect audio & start autopilot'}
+          </button>
+          {s.autopilot.on && <button className={r.apHeld ? 'on' : ''} aria-pressed={r.apHeld} onClick={E.toggleAutopilotHold}>{r.apHeld ? 'Held: click to resume' : 'Hold'}</button>}
+        </div>
+        {s.autopilot.on && (
+          <Note>
+            {r.apHeld ? 'Held. The look stays as it is.' : r.apPaused ? 'You changed something, so autopilot is stepping back for a few seconds.' : `Hearing: ${AP_SECTION[r.apSection] ?? r.apSection}. Next change in about ${r.apBarsLeft} ${r.apBarsLeft === 1 ? 'bar' : 'bars'}.`}
+          </Note>
+        )}
+        <Row label="Content">
+          <select value={s.autopilot.pool} onChange={(e) => E.setAutopilotConfig({ pool: e.target.value as ApPool })}>
+            {POOLS.map(([v, t]) => <option key={v} value={v}>{t}</option>)}
+          </select>
+        </Row>
+        <Row label="Intensity">
+          <Slider value={s.autopilot.intensity} min={0} max={1} step={0.05} onChange={(v) => E.setAutopilotConfig({ intensity: v })} format={pct} />
+        </Row>
+        <Row label="Flash on drops">
+          <input type="checkbox" checked={s.autopilot.strobe} onChange={(e) => E.setAutopilotConfig({ strobe: e.target.checked })} />
+        </Row>
+        <Help>Autopilot listens to the input and runs the show: scenes, your videos and the built-in visuals, colours, transitions, RGB split and optional flashes on drops. It changes on the bars and follows the music, calm in quiet parts and busier on drops. Change a scene, content or cue yourself and it steps back for about 20 seconds. It overwrites panel content and colours as it goes, so save your look as a cue first. Flashes are capped at 3 a second.</Help>
+      </Section>
+
       <Section id="cues" title={'Cues'}>
         <p className="note">
           {r.cueSaveMode

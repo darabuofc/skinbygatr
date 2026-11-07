@@ -1,3 +1,4 @@
+import { sanitizePlaylist } from './playlist';
 import type { Panel, SmdConfig, SmdFit, SmdPreset } from './types';
 
 /** Choices for the flash limit, in flashes per second (0 = no limit). 3 per second is the usual photosensitivity guideline. */
@@ -81,6 +82,7 @@ export function sanitizeSmd(v: unknown, validSource: (s: unknown) => s is string
   const d = defaultSmd();
   if (!v || typeof v !== 'object') return d;
   const o = v as Record<string, unknown>;
+  const playlist = sanitizePlaylist(o.playlist);
   return {
     ...clampSmdSize(o.width, o.height),
     fit: o.fit === 'pixel' ? 'pixel' : 'fit',
@@ -90,6 +92,7 @@ export function sanitizeSmd(v: unknown, validSource: (s: unknown) => s is string
     gamma: inRange(o.gamma, 0.5, 3, d.gamma),
     warmth: inRange(o.warmth, -1, 1, d.warmth),
     flashLimit: (FLASH_LIMITS as readonly number[]).includes(o.flashLimit as number) ? (o.flashLimit as number) : d.flashLimit,
+    ...(playlist ? { playlist } : {}),
   };
 }
 

@@ -57,6 +57,8 @@ export interface RemoteSnapshot {
   lock: Lock;
   /** The host is driving an SMD screen: there are no panels to map, so the remote hides its Map tab. */
   smd?: boolean;
+  /** Autopilot is running the show. */
+  ap?: boolean;
 }
 /** Host → remote: the current state, sent on change and every few seconds as a heartbeat. */
 export interface StateMsg { t: 'state'; s: RemoteSnapshot }
@@ -210,6 +212,7 @@ export function parseToRemote(raw: unknown): ToRemote | null {
       params,
       lock: LOCKS.includes(s.lock as Lock) ? (s.lock as Lock) : 'control',
       ...(s.smd === true ? { smd: true } : {}),
+      ...(s.ap === true ? { ap: true } : {}),
     },
   };
 }
@@ -232,6 +235,7 @@ export function buildSnapshot(s: Settings, blackout: boolean, params: ParamValue
     params,
     lock: effectiveLock(lock, smd),
     ...(smd ? { smd: true } : {}),
+    ...(s.autopilot.on ? { ap: true } : {}),
   };
 }
 
