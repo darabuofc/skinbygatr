@@ -5,6 +5,7 @@ import { meshLines } from './mesh';
 import {
   clamp, deleteMaskPoint, insertMaskPoint, moveMaskPoint, moveMeshPoint, recordMapping, runtime, settings, toggleMaskPoint,
 } from './store';
+import { smdBox } from './smd';
 import type { Mask, Pt, Quad } from './types';
 
 const CSS = `
@@ -243,11 +244,22 @@ export class Output {
   stageRect(): StageRect {
     const W = this.win.innerWidth, H = this.win.innerHeight;
     const r = runtime.get();
+    if (r.mode === 'smd') return this.smdRect(W, H, r);
     if (this.source) return mirrorRect(W, H, this.source.win.innerWidth, this.source.win.innerHeight, !r.hideUi);
     const controlsVisible = !r.hideUi && !r.showMode;
     if (this.isPopup() || !controlsVisible || W <= SIDE_BREAKPOINT) return { x: 0, y: 0, w: W, h: H };
     const area = { x: SIDE + GAP, y: GAP, w: Math.max(1, W - SIDE - GAP * 2), h: Math.max(1, H - GAP * 2) };
     return fitRect(area, W, H);
+  }
+
+  /** SMD mode: the screen's own shape, scaled to fit the window or at true pixel size in its corner. */
+  private smdRect(W: number, H: number, r: { hideUi: boolean; showMode: boolean }): StageRect {
+    const cfg = settings.get().smd;
+    if (this.source) return mirrorRect(W, H, cfg.width, cfg.height, !r.hideUi);
+    if (this.isPopup()) return smdBox(W, H, this.win.devicePixelRatio || 1, cfg);
+    if (r.hideUi || r.showMode || W <= SIDE_BREAKPOINT) return smdBox(W, H, this.win.devicePixelRatio || 1, { ...cfg, fit: 'fit' });
+    const area = { x: SIDE + GAP, y: GAP, w: Math.max(1, W - SIDE - GAP * 2), h: Math.max(1, H - GAP * 2) };
+    return fitRect(area, cfg.width, cfg.height);
   }
 
   rebuild() {
@@ -297,13 +309,16 @@ export class Output {
     const s = settings.get();
     const sel = runtime.get().selCorner;
     const rect = this.stageRect();
-    const inset = rect.w !== this.win.innerWidth || rect.h !== this.win.innerHeight;
+    const smd = runtime.get().mode === 'smd';
+    const inset = rect.w !== this.win.innerWidth || rect.h !== this.win.innerHeight || rect.x !== 0 || rect.y !== 0;
+    // The mapping dots belong to panels; an SMD screen has none.
+    this.handles.style.visibility = smd ? 'hidden' : '';
     for (const el of [this.stage, this.handles]) {
       Object.assign(el.style, inset
         ? { inset: 'auto', left: `${rect.x}px`, top: `${rect.y}px`, width: `${rect.w}px`, height: `${rect.h}px` }
         : { inset: '0', left: '', top: '', width: '', height: '' });
     }
-    this.stage.classList.toggle('inset', inset);
+    this.stage.classList.toggle('inset', inset && !this.isPopup());
     const W = rect.w, H = rect.h;
     const f = this.viewFlip();
     s.panels.forEach((p, i) => {

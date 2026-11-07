@@ -27,6 +27,12 @@ uniform float uKicks[8];
 
 ${NOISE_GLSL}
 
+// One pixel in screen-height units, and the thinnest line worth drawing. On a small LED screen a
+// line thinner than a pixel flickers in and out, so thin lines are floored at 1.5 pixels. At 1080p
+// this equals the widths the scenes were designed with.
+float px() { return 1.0 / uRes.y; }
+float thin(float w) { return max(w, 1.5 * px()); }
+
 vec3 pulse(vec2 fc) {
   vec2 p = (fc - 0.5 * uRes) / uRes.y;
   float d = length(p);
@@ -35,7 +41,7 @@ vec3 pulse(vec2 fc) {
     float t = uKicks[i];
     if (t < 3.0) {
       float r = t * (0.55 + uMid * 0.9);
-      float w = 0.006 + 0.035 * uBass * exp(-t * 2.0);
+      float w = thin(0.006 + 0.035 * uBass * exp(-t * 2.0));
       col += uC1 * exp(-t * 1.3) * smoothstep(w, 0.0, abs(d - r));
     }
   }
@@ -60,16 +66,18 @@ vec3 scan(vec2 fc) {
     float fk = float(k);
     bool major = mod(fk, 3.0) < 0.5;
     float yy = fract(fk / 10.0 + uPhaseA);
-    float th = 0.002 + uBass * 0.03 * (major ? 1.0 : 0.35);
+    float th = thin(0.002 + uBass * 0.03 * (major ? 1.0 : 0.35));
     float a = 0.35 + 0.65 * (mod(fk, 2.0) > 0.5 ? uHigh : uBass);
     float dy = abs(y - yy); dy = min(dy, 1.0 - dy);
-    col += (major ? uC2 : uC1) * a * smoothstep(th + 0.0015, th * 0.5, dy);
+    col += (major ? uC2 : uC1) * a * smoothstep(th + max(0.0015, px()), th * 0.5, dy);
   }
   return col + uC1 * 0.2 * uKick;
 }
 
 vec3 grid(vec2 fc) {
-  vec2 g = fc / uRes * vec2(8.0, 5.0);
+  // Five rows, and as many columns as keep the cells square (8 across at 16:9, 5 on a square screen).
+  float cols = max(1.0, floor(5.0 * (uRes.x / uRes.y) * 0.9 + 0.5));
+  vec2 g = fc / uRes * vec2(cols, 5.0);
   vec2 c = floor(g), f = fract(g);
   float inside = step(0.04, f.x) * step(f.x, 0.96) * step(0.06, f.y) * step(f.y, 0.94);
   float lit = 0.0;
@@ -124,7 +132,7 @@ vec3 lasers(vec2 fc) {
     float base = (fi / 11.0 - 0.5) * fan + sin(uPhaseA * 2.0 + fi * 0.9) * 0.06;
     float off = ang - base;
     float dist = abs(sin(off)) * len;
-    float w = 0.0015 + 0.006 * uBass;
+    float w = thin(0.0015 + 0.006 * uBass);
     float on = step(0.3, hash(vec2(fi, floor(uBeat))));
     float beam = (smoothstep(w, 0.0, dist) + 0.35 * exp(-dist * 90.0)) * step(0.0, cos(off));
     col += mix(uC1, uC2, mod(fi, 2.0)) * beam * on * (0.6 + 0.4 * uHigh);
@@ -164,7 +172,7 @@ vec3 radial(vec2 fc) {
   float inner = 0.16 + 0.06 * uKick;
   float bar = step(inner, r) * step(r, inner + 0.02 + v * 0.34) * step(0.18, fract(x * n));
   vec3 col = mix(uC1, uC2, smoothstep(0.1, 0.3, r - inner)) * bar * (0.4 + 0.6 * v);
-  col += uC2 * smoothstep(0.006, 0.0, abs(r - inner + 0.025)) * (0.4 + uKick);
+  col += uC2 * smoothstep(thin(0.006), 0.0, abs(r - inner + 0.025)) * (0.4 + uKick);
   return col + uC1 * 0.3 * uBass * smoothstep(inner - 0.04, 0.0, r);
 }
 
@@ -366,6 +374,8 @@ uniform sampler2D uTex;
 uniform vec2 uRes;
 uniform float uBloom, uRipple, uRippleT, uTint, uSaturation, uVignette;
 uniform vec3 uTintColor;
+// LED output: brightness ceiling, gamma (output = colour ^ gamma) and warmth (-1 cool .. 1 warm).
+uniform float uCap, uGamma, uWarm;
 
 void main() {
   vec2 uv = gl_FragCoord.xy / uRes;
@@ -382,7 +392,11 @@ void main() {
   col = mix(col, l * uTintColor * 1.8, uTint);
   float d = length((uv - 0.5) * vec2(uRes.x / uRes.y, 1.0)) / length(vec2(0.5 * uRes.x / uRes.y, 0.5));
   col *= mix(1.0, smoothstep(1.05, 0.35, d), uVignette);
-  o = vec4(clamp(col, 0.0, 1.0), 1.0);
+  col = clamp(col, 0.0, 1.0);
+  col = pow(col, vec3(uGamma));
+  // Warm turns blue (and a little green) down, cool turns red down; neither can add light, so the ceiling holds.
+  col *= vec3(1.0 - 0.4 * max(-uWarm, 0.0), 1.0 - 0.12 * abs(uWarm), 1.0 - 0.4 * max(uWarm, 0.0));
+  o = vec4(col * uCap, 1.0);
 }`;
 
 /** Neon outline strip: clip-space position, position round the loop and side of the line. */

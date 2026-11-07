@@ -192,8 +192,34 @@ export interface LookPanel {
 export type MidiKind = 'note' | 'cc';
 export interface MidiBinding { kind: MidiKind; channel: number; num: number; }
 
+/** What the app is driving: the startup choice, a projector mapping, or a single LED (SMD) screen. */
+export type AppMode = 'choose' | 'mapping' | 'smd';
+
+/** How the SMD picture sits in its output window: scaled to fit, or at its true pixel size in the top-left corner. */
+export type SmdFit = 'fit' | 'pixel';
+
+/** One SMD (LED) screen: its pixel grid and what it shows. Visuals are drawn at exactly this size. */
+export interface SmdConfig {
+  width: number;
+  height: number;
+  fit: SmdFit;
+  /** Same source strings as a panel: 'gen', 'fx:<id>', 'vid:<id>' or 'img:<id>'. */
+  source: string;
+  band: Band;
+  /** Brightness ceiling for the room, 0.1..1. The Master fader works underneath it. */
+  maxBrightness: number;
+  /** Output curve, 0.5..3: the picture is raised to this power. 1 leaves it alone; higher darkens mid-tones. */
+  gamma: number;
+  /** -1 (cooler) to 1 (warmer), by turning down blue or red. 0 leaves colour alone. */
+  warmth: number;
+  /** Most full-screen flashes per second (strobe and held flash); 0 means no limit. */
+  flashLimit: number;
+}
+
 export interface Settings {
   version: 3;
+  /** The SMD screen's size and content; used in SMD mode, ignored when mapping. */
+  smd: SmdConfig;
   outputs: OutputConfig[];
   panels: Panel[];
   selected: number;
@@ -232,6 +258,8 @@ export interface VideoItem { id: string; name: string; size: number; }
 export interface ImageItem { id: string; name: string; size: number; w: number; h: number; }
 
 export interface Runtime {
+  /** 'choose' until the startup screen is answered. Not saved: the app asks every time it opens. */
+  mode: AppMode;
   showMode: boolean;
   blackout: boolean;
   flashHold: boolean;

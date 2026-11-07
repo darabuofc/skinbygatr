@@ -16,6 +16,8 @@ import {
   BarCounter, beatPeriod, Crossfade, glideAt, MAX_CUE_FADE_SEC, MAX_FADE_SEC, needsFade, type Glide, type WallLook,
 } from './transitions';
 import { Renderer, type FrameInput } from './renderer';
+import { ledOf, smdPanel } from './smd';
+import { FlashLimiter } from './strobe';
 import { mainView, pickDriver, windowName } from './surfaces';
 import {
   clamp, cueFadeInProgress, cueTransitionInProgress, defaultSettings, moveMaskPoint, moveMeshPoint, onCueRecall, recallCue, recordMapping, redoMapping, runtime, sanitize, setScene, settings, uid, undoMapping,
@@ -75,6 +77,8 @@ let panelSig = '';
 let outputSig = '';
 let prevSelected = -1;
 let prevPanels: Panel[] | null = null;
+const flashLimiter = new FlashLimiter();
+let prevSmd: Settings['smd'] = settings.get().smd;
 let prevOutputs: Settings['outputs'] | null = null;
 let prevSel: unknown = null;
 let prevStageSig = '';
@@ -217,7 +221,10 @@ export function openOutput(id: string = settings.get().outputs[0].id) {
   if (cur && isOpenPopup(cur)) { cur.output.win.focus(); return; }
   let w: Window | null = null;
   try {
-    w = window.open('', windowName(id), 'width=1280,height=720');
+    const sm = settings.get().smd;
+    // An SMD screen opens its window at the screen's own size (as far as the display allows).
+    const size = runtime.get().mode === 'smd' ? `width=${Math.min(sm.width, screen.availWidth)},height=${Math.min(sm.height, screen.availHeight)}` : 'width=1280,height=720';
+    w = window.open('', windowName(id), size);
     if (!w) {
       runtime.set({ outMsg: 'The browser blocked the window. Allow pop-ups for this site and try again.' });
       return;
@@ -343,7 +350,7 @@ function drawFrame() {
     span: s.span,
     testGrid: s.testGrid,
     blackout: r.blackout,
-    flash: r.flashHold ? 1 : s.strobe ? L.kickEnv * 0.85 : 0,
+    flash: flashLimiter.update(r.flashHold ? 1 : s.strobe ? L.kickEnv * 0.85 : 0, t, r.mode === 'smd' ? s.smd.flashLimit : 0),
     master: s.master,
     split: r.blackout ? 0 : splitOffset(L, s.rgbSplit, s.rgbDrive),
     react: s.react,
@@ -368,17 +375,20 @@ function drawFrame() {
       return { ...p, opacity: v };
     });
   }
+  const smd = r.mode === 'smd';
   for (const sf of surfaces.values()) {
     const cfg = outputCfg(sf.id);
     if (!cfg) continue;
-    sf.renderer?.render({
-      ...common, panels: panels.filter((p) => p.output === sf.id), flip: { h: cfg.flipH, v: cfg.flipV }, post: postFor(s, sf.id),
-    });
+    // An SMD screen is one full-size layer at the screen's own pixel size, on the first output only.
+    if (smd && sf.id !== s.outputs[0].id) continue;
+    sf.renderer?.render(smd
+      ? { ...common, panels: [smdPanel(s.smd, sf.id)], flip: { h: false, v: false }, post: postFor(s, sf.id), fixedSize: [s.smd.width, s.smd.height], led: ledOf(s.smd) }
+      : { ...common, panels: panels.filter((p) => p.output === sf.id), flip: { h: cfg.flipH, v: cfg.flipV }, post: postFor(s, sf.id) });
     // Straight after rendering, while the WebGL frame is still readable.
-    sf.output.drawLoupe(s.loupe && !r.showMode);
+    sf.output.drawLoupe(s.loupe && !r.showMode && !smd);
   }
   preview.copyFrame();
-  preview.drawLoupe(s.loupe);
+  preview.drawLoupe(s.loupe && !smd);
 }
 
 /** A projector's post effects this frame (eased, like shader settings), or null when they're all at rest. */
@@ -473,6 +483,28 @@ function cueRecalled(prevOpacity: Record<string, number>, fadeSec: number | null
     opacityGlides.set(p.id, { from: before, to: p.opacity, start: t, dur });
   }
 }
+
+/* ---------- mode ---------- */
+
+/** Remembered only to highlight the usual choice on the next start; the app still asks every time. */
+export const MODE_KEY = 'panelmapper.lastMode';
+
+export function lastMode(): 'mapping' | 'smd' | null {
+  try {
+    const v = localStorage.getItem(MODE_KEY);
+    return v === 'mapping' || v === 'smd' ? v : null;
+  } catch { return null; }
+}
+
+/** Picks what the app is driving. Mapping edits and SMD settings are kept apart, so switching loses neither. */
+export function setMode(mode: 'mapping' | 'smd') {
+  try { localStorage.setItem(MODE_KEY, mode); } catch { /* blocked */ }
+  runtime.set({ mode, selCorner: null, maskEdit: false });
+  allOutputs().forEach((o) => o.layout());
+}
+
+/** Back to the startup question without closing the projector window. */
+export function chooseMode() { runtime.set({ mode: 'choose' }); }
 
 /* ---------- show controls ---------- */
 
@@ -750,7 +782,10 @@ export async function removeVideo(id: string) {
   blobs.delete(id);
   surfaces.forEach((sf) => sf.renderer?.dropVideo(id));
   runtime.set((r) => ({ videos: r.videos.filter((x) => x.id !== id) }));
-  settings.set((s) => ({ panels: s.panels.map((p) => withoutItem(p.source === `vid:${id}` ? { ...p, source: 'gen' } : p, `vid:${id}`)) }));
+  settings.set((s) => ({
+    panels: s.panels.map((p) => withoutItem(p.source === `vid:${id}` ? { ...p, source: 'gen' } : p, `vid:${id}`)),
+    smd: s.smd.source === `vid:${id}` ? { ...s.smd, source: 'gen' } : s.smd,
+  }));
   updateStorage();
 }
 
@@ -832,7 +867,10 @@ export async function removeImage(id: string) {
   bitmaps.delete(id);
   surfaces.forEach((sf) => sf.renderer?.dropImage(id));
   runtime.set((r) => ({ images: r.images.filter((x) => x.id !== id) }));
-  settings.set((s) => ({ panels: s.panels.map((p) => withoutItem(p.source === `img:${id}` ? { ...p, source: 'gen' } : p, `img:${id}`)) }));
+  settings.set((s) => ({
+    panels: s.panels.map((p) => withoutItem(p.source === `img:${id}` ? { ...p, source: 'gen' } : p, `img:${id}`)),
+    smd: s.smd.source === `img:${id}` ? { ...s.smd, source: 'gen' } : s.smd,
+  }));
   settings.set((s) => ({
     panels: s.panels.map((p) => {
       if (!p.inputs || !Object.values(p.inputs).includes(id)) return p;
@@ -1038,6 +1076,7 @@ export function startEngine() {
   panelSig = panelSignature(s0);
   outputSig = outputSignature(s0);
   prevSelected = s0.selected;
+  prevSmd = s0.smd;
   shown = lookOf(s0);
   lastT = performance.now() / 1000;
 
@@ -1053,6 +1092,9 @@ export function startEngine() {
     // Handles only move when the mapping, the selection or a flip changes; a brightness or
     // reactivity fader streaming from MIDI leaves them alone.
     else if (s.panels !== prevPanels || s.selected !== prevSelected || s.outputs !== prevOutputs) allOutputs().forEach((o) => o.layout());
+    // A new screen size, fit or output shape re-lays the stage.
+    if (s.smd.width !== prevSmd.width || s.smd.height !== prevSmd.height || s.smd.fit !== prevSmd.fit) allOutputs().forEach((o) => o.layout());
+    prevSmd = s.smd;
     prevPanels = s.panels;
     prevOutputs = s.outputs;
     // Picking a panel on another open projector brings that projector into the live copy.
@@ -1065,7 +1107,7 @@ export function startEngine() {
   });
   runtime.subscribe(() => {
     const r = runtime.get();
-    const stageSig = `${r.hideUi}|${r.showMode}|${r.outputOpen}|${r.wallDots}|${r.maskEdit}`;
+    const stageSig = `${r.hideUi}|${r.showMode}|${r.outputOpen}|${r.wallDots}|${r.maskEdit}|${r.mode}`;
     if (r.selCorner !== prevSel || stageSig !== prevStageSig) {
       prevSel = r.selCorner; prevStageSig = stageSig;
       surfaces.forEach((sf) => sf.output.setDots(r.wallDots));

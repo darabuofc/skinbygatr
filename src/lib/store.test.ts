@@ -674,3 +674,19 @@ describe('cue transitions', () => {
     expect(sanitizeLook({ scene: 0, transition: 'warp' })).not.toHaveProperty('transition');
   });
 });
+
+describe('SMD screen settings', () => {
+  it('start as a square screen and survive a save and load', () => {
+    const d = sanitize({});
+    expect(d.smd.width).toBe(d.smd.height);
+    const back = sanitize(JSON.parse(JSON.stringify({ ...d, smd: { width: 640, height: 640, fit: 'pixel', source: 'fx:water', band: 'bass' } })));
+    expect(back.smd).toMatchObject({ width: 640, height: 640, fit: 'pixel', source: 'fx:water', band: 'bass' });
+  });
+  it('an old save without an SMD screen gets the default, and bad sizes are repaired', () => {
+    expect(sanitize({ panels: [] }).smd).toEqual(sanitize({}).smd);
+    const bad = sanitize({ smd: { width: -4, height: 1e9, source: 'nope' } });
+    expect(bad.smd.width).toBeGreaterThanOrEqual(16);
+    expect(bad.smd.width * bad.smd.height).toBeLessThanOrEqual(4096 * 4096);
+    expect(bad.smd.source).toBe('gen');
+  });
+});

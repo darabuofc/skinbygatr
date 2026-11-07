@@ -40,4 +40,20 @@ describe('shaders', () => {
       expect(src).toContain('col = transition(colB, col, uMix, uv);');
     }
   });
+
+  it('the post pass ends with gamma, warmth and a brightness ceiling that can only dim', () => {
+    expect(POST_FS).toMatch(/pow\(col, vec3\(uGamma\)\)/);
+    expect(POST_FS).toMatch(/o = vec4\(col \* uCap, 1\.0\)/);
+    // Warmth factors are all at most 1, so they can't push a channel past the ceiling.
+    expect(POST_FS).not.toMatch(/1\.0 \+ 0\.\d+ \*/);
+  });
+
+  it('scenes keep square cells and visible lines on any screen shape', () => {
+    // Grid columns follow the aspect ratio (no fixed 8 x 5 stretched over a square screen).
+    expect(SCENE_FS).not.toContain('vec2(8.0, 5.0)');
+    expect(SCENE_FS).toMatch(/cols\s*=.*uRes\.x \/ uRes\.y/);
+    // Thin lines are floored at 1.5 pixels, so a small LED screen doesn't flicker them away.
+    expect(SCENE_FS).toMatch(/float thin\(float w\) \{ return max\(w, 1\.5 \* px\(\)\); \}/);
+    expect((SCENE_FS.match(/thin\(/g) ?? []).length).toBeGreaterThanOrEqual(5);
+  });
 });

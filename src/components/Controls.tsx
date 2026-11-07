@@ -4,7 +4,7 @@ import * as E from '@/lib/engine';
 import { useStore } from '@/lib/hooks';
 import {
   addMask, addOutput, addPanel, clearCue, removeMask, setImageMask, setMaskSmooth, setTracedMask, setMeshSize, setPanelInput, updateMask, deletePanel, layerTarget, movePanelLayer, movePanelToOutput, recallCue, removeOutput, redoMapping, runtime, saveCue, selectPanel, setScene, settings, undoMapping,
-  removeOutline, removePlaylist, updateOutline, updatePlaylist, updateOutput, updatePanel,
+  removeOutline, removePlaylist, updateOutline, updatePlaylist, updateOutput, updatePanel, updateSmd,
 } from '@/lib/store';
 import { summarize, type Check } from '@/lib/preflight';
 import { BAR_CHOICES, BEATS_PER_BAR, CUE_FADE_CHOICES, FADE_CHOICES } from '@/lib/transitions';
@@ -15,13 +15,14 @@ import { POST_GROUPS } from '@/lib/post';
 import { defaultLabel, MAX_LABEL_CHARS } from '@/lib/text';
 import {
   BANDS, BLEND_MODES, MAX_OUTPUTS, SCENES, SCENE_KEYS, TRANSITIONS, OUTLINE_STYLES, type Band, type BlendMode, type Mask, type Outline, type OutputConfig,
-  type PanelLabel, type PanelPlaylist, type TransitionMode,
+  type PanelLabel, type PanelPlaylist, type SmdFit, type TransitionMode,
 } from '@/lib/types';
 import { MAX_MASK_FEATHER } from '@/lib/mask';
 import { MAX_OUTLINE_RUNNERS, MAX_OUTLINE_SPEED, MAX_OUTLINE_WIDTH, OUTLINE_SYNCS } from '@/lib/outline';
 import { bakeMaskImage, traceImage, type TraceFit } from '@/lib/trace';
 import { MESH_SIZES } from '@/lib/mesh';
 import { MAX_PLAYLIST_ITEMS, PLAYLIST_BEAT_CHOICES, PLAYLIST_ORDERS } from '@/lib/playlist';
+import { FLASH_LIMITS, SMD_FITS, SMD_PRESETS } from '@/lib/smd';
 import RemotePanel from './RemotePanel';
 
 function Row({ label, children }: { label: string; children: ReactNode }) {
@@ -483,6 +484,96 @@ function ProjectorCard({ o, index, multi, open }: { o: OutputConfig; index: numb
   );
 }
 
+/** A pixel size typed in; applied on Enter or when the field loses focus, so half-typed numbers aren't clamped mid-edit. */
+function PixelInput({ value, label, onCommit }: { value: number; label: string; onCommit: (v: number) => void }) {
+  const [text, setText] = useState(String(value));
+  useEffect(() => setText(String(value)), [value]);
+  const commit = () => { const n = Number(text); if (Number.isFinite(n) && n > 0) onCommit(n); else setText(String(value)); };
+  return (
+    <input type="number" inputMode="numeric" min={16} max={8192} step={1} value={text} aria-label={label}
+      onChange={(e) => setText(e.target.value)} onBlur={commit} onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }} />
+  );
+}
+
+/** Setup for the one SMD (LED) screen: its pixel size, how it sits in the window, and what it shows. */
+function SmdScreen({ open }: { open: boolean }) {
+  const s = useStore(settings);
+  const r = useStore(runtime);
+  const m = s.smd;
+  const match = SMD_PRESETS.find((x) => x.width === m.width && x.height === m.height);
+  const src = m.source;
+  return (
+    <Section id="smd" title="SMD screen">
+      <Row label="Size preset">
+        <select value={match ? `${match.width}x${match.height}` : 'custom'} aria-label="Size preset"
+          onChange={(e) => { const [w, h] = e.target.value.split('x').map(Number); if (w && h) updateSmd({ width: w, height: h }); }}>
+          {SMD_PRESETS.map((x) => <option key={x.name} value={`${x.width}x${x.height}`}>{x.name} ({x.width} × {x.height})</option>)}
+          {!match && <option value="custom">Custom</option>}
+        </select>
+      </Row>
+      <Row label="Width (px)"><PixelInput value={m.width} label="Screen width in pixels" onCommit={(v) => updateSmd({ width: v })} /></Row>
+      <Row label="Height (px)"><PixelInput value={m.height} label="Screen height in pixels" onCommit={(v) => updateSmd({ height: v })} /></Row>
+      <div className="btns">
+        <button onClick={() => updateSmd({ height: m.width })} disabled={m.width === m.height}>Make square (use width)</button>
+      </div>
+      <Note>{m.width} × {m.height} px · {(m.width / m.height).toFixed(3)}:1{m.width === m.height ? ' · square' : ''}</Note>
+      <Row label="In the screen window">
+        <select value={m.fit} onChange={(e) => updateSmd({ fit: e.target.value as SmdFit })}>
+          {SMD_FITS.map(([v, n]) => <option key={v} value={v}>{n}</option>)}
+        </select>
+      </Row>
+      <Row label="Shows">
+        <select value={src} onChange={(e) => updateSmd({ source: e.target.value })}>
+          <option value="gen">Generated visuals</option>
+          <optgroup label="Shaders">{FX.map((f) => <option key={f.id} value={`fx:${f.id}`}>{f.name}</option>)}</optgroup>
+          {r.videos.length > 0 && <optgroup label="Videos">{r.videos.map((v) => <option key={v.id} value={`vid:${v.id}`}>{v.name}</option>)}</optgroup>}
+          {r.images.length > 0 && <optgroup label="Pictures">{r.images.map((im) => <option key={im.id} value={`img:${im.id}`}>{im.name}</option>)}</optgroup>}
+        </select>
+      </Row>
+      <Row label="Brightness follows">
+        <select value={m.band} onChange={(e) => updateSmd({ band: e.target.value as Band })}>
+          {BANDS.map(([v, n]) => <option key={v} value={v}>{n}</option>)}
+        </select>
+      </Row>
+      <Row label="Test grid (G)">
+        <input type="checkbox" checked={s.testGrid} onChange={(e) => settings.set({ testGrid: e.target.checked })} />
+      </Row>
+      <h3 className="sub-h">LED output</h3>
+      <Row label="Maximum brightness">
+        <Slider value={m.maxBrightness} min={0.1} max={1} step={0.01} onChange={(v) => updateSmd({ maxBrightness: v })} format={pct} />
+      </Row>
+      <Row label="Gamma">
+        <Slider value={m.gamma} min={0.5} max={3} step={0.05} onChange={(v) => updateSmd({ gamma: v })} format={(v) => v.toFixed(2)} />
+      </Row>
+      <Row label="Colour temperature">
+        <Slider value={m.warmth} min={-1} max={1} step={0.05} onChange={(v) => updateSmd({ warmth: v })}
+          format={(v) => (Math.abs(v) < 0.025 ? 'Neutral' : v > 0 ? `Warm ${Math.round(v * 100)}` : `Cool ${Math.round(-v * 100)}`)} />
+      </Row>
+      <Row label="Flash limit">
+        <select value={m.flashLimit} onChange={(e) => updateSmd({ flashLimit: +e.target.value })}>
+          {FLASH_LIMITS.map((n) => <option key={n} value={n}>{n === 0 ? 'No limit' : `${n} per second`}</option>)}
+        </select>
+      </Row>
+      <Help label="What these do">
+        Maximum brightness is a ceiling for the room: the Master fader works underneath it, so the screen can never be pushed past it. Gamma raises the picture
+        to a power; above 1 it darkens mid-tones, which often makes an LED wall look less washed out. Colour temperature only turns blue (warm) or red (cool) down,
+        so it never adds light. Flash limit caps how often the whole screen may flash, for the strobe option and the Flash key; the scenes’ own beat pulses are not
+        flashes of the whole screen and are left alone. Three a second is the usual guideline for photosensitive viewers.
+      </Help>
+      <div className="btns spaced">
+        <button className="primary" onClick={() => E.openOutput()}>{open ? 'Focus screen window' : 'Open screen window'}</button>
+      </div>
+      <Note warn>{r.outMsg}</Note>
+      <Help>
+        The visuals are drawn at exactly {m.width} × {m.height} pixels, so nothing is stretched. Drag the screen window onto the display that feeds the LED
+        processor, click inside it and press F for full screen. “True pixel size” puts the picture at its real size in the window’s top-left corner, for a
+        processor that takes that corner of the signal; “Scale to fill” fits it to the window instead. The test grid draws a border, a grid, diagonals and a
+        circle so you can check the edges, the shape and that nothing is cropped.
+      </Help>
+    </Section>
+  );
+}
+
 const STATUS_TEXT = { ok: 'OK', warn: 'Check', fail: 'Fix', skip: 'n/a' } as const;
 
 function Preflight({ active }: { active: boolean }) {
@@ -526,6 +617,7 @@ export default function Controls({ hidden }: { hidden: boolean }) {
   const layoutInput = useRef<HTMLInputElement>(null);
   const [tab, setTab] = useTab();
   const p = s.panels[s.selected];
+  const smdMode = r.mode === 'smd';
   const outName = (id: string) => s.outputs.find((o) => o.id === id)?.name ?? '';
 
   const sourceName = (src: string) => {
@@ -547,7 +639,10 @@ export default function Controls({ hidden }: { hidden: boolean }) {
     >
       <header className="head">
         <h1>Panel Mapper</h1>
-        <p className="sub">Fit visuals onto your panels and let the music drive them.</p>
+        <p className="sub">
+          {smdMode ? 'Fill your SMD screen and let the music drive it.' : 'Fit visuals onto your panels and let the music drive them.'}{' '}
+          <button className="link" onClick={E.chooseMode}>Switch mode</button>
+        </p>
         {(r.offlineReady || r.wakeLock) && (
           <p className="status-line">
             {r.offlineReady && <span className="dot">Works offline</span>}
@@ -581,6 +676,7 @@ export default function Controls({ hidden }: { hidden: boolean }) {
       {tab === 'setup' && <>
       <Preflight active={!hidden} />
 
+      {smdMode ? <SmdScreen open={r.openOutputs.length > 0} /> : <>
       <Section id="projector" title={s.outputs.length > 1 ? 'Projectors' : 'Projector'}>
         {s.outputs.map((o, i) => (
           <ProjectorCard key={o.id} o={o} index={i} multi={s.outputs.length > 1} open={r.openOutputs.includes(o.id)} />
@@ -714,6 +810,7 @@ export default function Controls({ hidden }: { hidden: boolean }) {
           <input type="checkbox" checked={s.span} onChange={(e) => settings.set({ span: e.target.checked })} />
         </Row>
       </Section>
+      </>}
       </>}
 
       {tab === 'perform' && <>

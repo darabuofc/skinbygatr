@@ -6,6 +6,7 @@ import { defaultPlaylist, sanitizePlaylist } from './playlist';
 import { defaultMask, insertIndex, MAX_MASK_POINTS, MIN_MASK_POINTS, sanitizeMask } from './mask';
 import { MAX_MESH, meshCorners, meshFromQuad, MIN_MESH, resampleMesh, sanitizeMesh } from './mesh';
 import { Store } from './observable';
+import { clampSmdSize, defaultSmd, sanitizeSmd } from './smd';
 import { params, sanitizeParamSnapshot, type ParamValues } from './params';
 import { BAR_CHOICES, BEATS_PER_BAR, CUE_FADE_CHOICES, FADE_CHOICES, MAX_CUE_FADE_SEC } from './transitions';
 import { defaultLabel, MAX_LABEL_CHARS } from './text';
@@ -56,6 +57,7 @@ export function defaultPanels(output = FIRST_OUTPUT): Panel[] {
 export function defaultSettings(): Settings {
   return {
     version: 3,
+    smd: defaultSmd(),
     outputs: defaultOutputs(),
     panels: defaultPanels(),
     selected: 0,
@@ -269,6 +271,7 @@ export function sanitize(raw: unknown): Settings {
   const cuesIn = Array.isArray(o.cues) ? o.cues : [];
   const s: Settings = {
     version: 3,
+    smd: sanitizeSmd(o.smd, validSource, validBand),
     outputs,
     panels: panels.length ? panels : defaultPanels(outputs[0].id),
     selected: 0,
@@ -314,6 +317,7 @@ export function loadSettings(storage: Pick<Storage, 'getItem'>): Settings {
 export const settings = new Store<Settings>(typeof window === 'undefined' ? defaultSettings() : loadSettings(localStorage));
 
 export const runtime = new Store<Runtime>({
+  mode: 'choose',
   showMode: false,
   blackout: false,
   flashHold: false,
@@ -428,6 +432,15 @@ export function setScene(i: number) { settings.set({ scene: clamp(Math.round(i),
 export function selectPanel(i: number) {
   settings.set({ selected: i });
   runtime.set({ selCorner: null });
+}
+
+/** Changes the SMD screen's size, shape, fit or content. A size is made usable first (whole pixels, within limits). */
+export function updateSmd(patch: Partial<Settings['smd']>) {
+  settings.set((s) => {
+    const next = { ...s.smd, ...patch };
+    if ('width' in patch || 'height' in patch) Object.assign(next, clampSmdSize(next.width, next.height));
+    return { smd: next };
+  });
 }
 
 export function updatePanel(i: number, patch: Partial<Panel>) {

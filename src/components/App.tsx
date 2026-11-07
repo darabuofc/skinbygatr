@@ -5,6 +5,7 @@ import { useStore } from '@/lib/hooks';
 import { resumeRemoteHost } from '@/lib/remoteHost';
 import { runtime, settings } from '@/lib/store';
 import Controls from './Controls';
+import ModeGate from './ModeGate';
 
 export default function App() {
   useEffect(() => { startEngine(); resumeRemoteHost(); }, []);
@@ -16,14 +17,15 @@ export default function App() {
     <>
       <div id="pm-host" />
       <Controls hidden={hideControls} />
+      {r.mode === 'choose' && <ModeGate />}
       {r.outputOpen && (
         <div className={`mirror-bar${r.hideUi ? ' full' : ''}`}>
           <span className="live-dot" aria-hidden />
           <p>
-            <strong>Live copy of {s.outputs.length > 1 ? names[r.previewOutput] ?? 'the projector' : 'the projector window'}.</strong>{' '}
+            <strong>Live copy of {r.mode === 'smd' ? 'the SMD screen' : s.outputs.length > 1 ? names[r.previewOutput] ?? 'the projector' : 'the projector window'}.</strong>{' '}
             Changes here go to the wall straight away. Keep this window open; closing it stops the visuals.
           </p>
-          {r.openOutputs.length > 1 && (
+          {r.mode !== 'smd' && r.openOutputs.length > 1 && (
             <div className="tabs" role="group" aria-label="Projector shown here">
               {r.openOutputs.map((id) => (
                 <button key={id} className={id === r.previewOutput ? 'on' : ''} aria-pressed={id === r.previewOutput} onClick={() => showPreview(id)}>
@@ -32,10 +34,10 @@ export default function App() {
               ))}
             </div>
           )}
-          <label>
+          {r.mode !== 'smd' && <label>
             <input type="checkbox" checked={r.wallDots} onChange={(e) => runtime.set({ wallDots: e.target.checked })} />
             Dots on the wall
-          </label>
+          </label>}
         </div>
       )}
     </>

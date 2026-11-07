@@ -193,3 +193,19 @@ section .params + .params { margin-top: 12px; }
 }
 .help-btn[aria-expanded="true"] span { background: var(--raise); color: var(--ink); }
 .help .note { margin-top: 4px; }
+
+/* Startup choice: SMD screen or mapping. */
+.gate { position: fixed; inset: 0; z-index: 100; background: rgba(8,9,12,.97); display: grid; place-items: center; padding: 24px; }
+.gate-box { width: min(760px, 100%); }
+.gate-box h1 { font-size: 28px; font-weight: 600; margin: 0 0 24px; letter-spacing: -0.01em; text-align: center; }
+.gate-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.gate-card { display: flex; flex-direction: column; gap: 10px; text-align: left; padding: 26px 24px; min-height: 190px; background: var(--raise); border: 1.5px solid var(--line); border-radius: 12px; color: var(--ink); cursor: pointer; font: inherit; }
+.gate-card strong { font-size: 24px; font-weight: 600; }
+.gate-card span { color: var(--muted); font-size: 14.5px; line-height: 1.5; }
+.gate-card small { margin-top: auto; color: var(--amber); font-size: 12.5px; }
+.gate-card:hover, .gate-card:focus-visible { border-color: var(--amber); outline: none; }
+.gate-card.last { border-color: rgba(255,176,0,.55); }
+.gate-note { color: var(--muted); text-align: center; margin: 20px 0 0; font-size: 13px; }
+@media (max-width: 640px) { .gate-cards { grid-template-columns: 1fr; } .gate-card { min-height: 0; } }
+button.link { background: none; border: 0; padding: 0; color: var(--amber); font: inherit; font-size: 13px; cursor: pointer; text-decoration: underline; }
+.sub-h { font-size: 13px; font-weight: 600; color: var(--muted); margin: 14px 0 6px; text-transform: uppercase; letter-spacing: .04em; }

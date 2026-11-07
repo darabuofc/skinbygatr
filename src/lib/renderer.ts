@@ -65,7 +65,16 @@ export interface FrameInput {
   /** Decoded library image (such as a height map) by id, or null while it loads or if it's gone. */
   getImage: (id: string) => ImageBitmap | null;
   fade?: FadeInput | null;
+  /** Draw at exactly this many pixels (an SMD screen) instead of following the window; null or missing follows the window. */
+  fixedSize?: [number, number] | null;
+  /** LED output corrections (SMD mode); null or missing leaves the picture as drawn. */
+  led?: LedValues | null;
 }
+
+/** Brightness ceiling, gamma and warmth applied last, to the whole picture. */
+export interface LedValues { cap: number; gamma: number; warmth: number; }
+
+const NEUTRAL_POST: PostValues = { bloom: 0, ripple: 0, rippleT: 0, tint: 0, tintHue: 0.5, saturation: 1, vignette: 0 };
 
 type Uniforms = Record<string, WebGLUniformLocation | null>;
 interface Prog { p: WebGLProgram; u: Uniforms; }
@@ -222,7 +231,7 @@ export class Renderer {
     // Without the panel program nothing can be drawn at all, so that one stays fatal.
     this.panel = link(gl, PANEL_FS, ['uInvH', ...PANEL_UNIFORMS]);
     // Mesh panels have their own program; if it fails they show black and flat panels carry on.
-    this.postProg = tryLink(gl, POST_FS, ['uTex', 'uRes', 'uBloom', 'uRipple', 'uRippleT', 'uTint', 'uSaturation', 'uVignette', 'uTintColor'],
+    this.postProg = tryLink(gl, POST_FS, ['uTex', 'uRes', 'uBloom', 'uRipple', 'uRippleT', 'uTint', 'uSaturation', 'uVignette', 'uTintColor', 'uCap', 'uGamma', 'uWarm'],
       (msg) => this.problems.push(`Post effects are off: ${msg}`));
     this.postTarget = null;
     this.meshProg = tryLink(gl, PANEL_MESH_FS, PANEL_UNIFORMS, (msg) => this.problems.push(`Mesh warp is off: ${msg}`), MESH_VS);
@@ -246,6 +255,10 @@ export class Renderer {
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, 64, 1, 0, gl.RED, gl.UNSIGNED_BYTE, null);
   }
 
+  /** Size of the scene buffers: 1080p, or the SMD screen's own size. */
+  private sw = SW;
+  private sh = SH;
+
   private makeTarget(w = SW, h = SH): [WebGLFramebuffer, WebGLTexture] {
     const gl = this.gl;
     const tex = this.makeTex();
@@ -268,15 +281,28 @@ export class Renderer {
     return t;
   }
 
-  private resize() {
+  private resize(fixed?: [number, number] | null) {
     const win = this.canvas.ownerDocument.defaultView ?? window;
     const dpr = Math.min(2, win.devicePixelRatio || 1);
-    const w = Math.max(1, Math.round(this.canvas.clientWidth * dpr));
-    const h = Math.max(1, Math.round(this.canvas.clientHeight * dpr));
+    const w = fixed ? fixed[0] : Math.max(1, Math.round(this.canvas.clientWidth * dpr));
+    const h = fixed ? fixed[1] : Math.max(1, Math.round(this.canvas.clientHeight * dpr));
+    this.setSceneSize(fixed ? fixed[0] : SW, fixed ? fixed[1] : SH);
     if (this.canvas.width !== w || this.canvas.height !== h) {
       this.canvas.width = w;
       this.canvas.height = h;
     }
+  }
+
+  /** Reallocates both scene buffers when the screen's size changes, so scenes are drawn at the shape they're shown in. */
+  private setSceneSize(w: number, h: number) {
+    if (w === this.sw && h === this.sh) return;
+    const gl = this.gl;
+    for (const tex of [this.fboTex, this.fboTexB]) {
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    }
+    this.sw = w;
+    this.sh = h;
   }
 
   /** Binds the video's texture, uploading the current frame once per rendered frame. */
@@ -585,7 +611,7 @@ export class Renderer {
   render(f: FrameInput) {
     const gl = this.gl;
     if (this.lost || gl.isContextLost()) return;
-    this.resize();
+    this.resize(f.fixedSize);
     const W = this.canvas.width, H = this.canvas.height;
     this.uploaded.clear();
     gl.bindVertexArray(this.vao);
@@ -609,7 +635,8 @@ export class Renderer {
     }
 
     // With post effects on, panels draw into a frame of their own, finished onto the canvas afterwards.
-    const post = f.post && this.postProg && !f.blackout && !f.testGrid ? f.post : null;
+    // LED corrections ride on the same pass, so they stay on for the test grid too.
+    const post = this.postProg && !f.blackout ? ((!f.testGrid ? f.post : null) ?? (f.led ? NEUTRAL_POST : null)) : null;
     const target = post ? this.framebufferFor(W, H) : null;
     gl.bindFramebuffer(gl.FRAMEBUFFER, target?.fbo ?? null);
     gl.viewport(0, 0, W, H);
@@ -758,7 +785,7 @@ export class Renderer {
         gl.enable(gl.SCISSOR_TEST);
       }
     });
-    if (post && target) this.postPass(target, post, W, H);
+    if (post && target) this.postPass(target, post, W, H, f.led);
   }
 
   /** The panels' frame for the post pass, sized to the canvas, with mip levels for the bloom. */
@@ -778,7 +805,7 @@ export class Renderer {
   }
 
   /** Finishes the panels' frame onto the canvas with this projector's post effects. */
-  private postPass(t: Target, v: PostValues, W: number, H: number) {
+  private postPass(t: Target, v: PostValues, W: number, H: number, led?: LedValues | null) {
     const gl = this.gl;
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, W, H);
@@ -799,21 +826,24 @@ export class Renderer {
     gl.uniform1f(u.uSaturation, v.saturation);
     gl.uniform1f(u.uVignette, v.vignette);
     gl.uniform3fv(u.uTintColor, hueToRgb(v.tintHue));
+    gl.uniform1f(u.uCap, led?.cap ?? 1);
+    gl.uniform1f(u.uGamma, led?.gamma ?? 1);
+    gl.uniform1f(u.uWarm, led?.warmth ?? 0);
     gl.bindVertexArray(this.vao);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
 
-  /** Draws one generated scene into a 1080p buffer. The spectrum texture must already be current. */
+  /** Draws one generated scene into the scene buffer (1080p, or the SMD screen's size). The spectrum texture must already be current. */
   private renderScene(fbo: WebGLFramebuffer, f: FrameInput, scene: number, c1: number[], c2: number[]) {
     const gl = this.gl;
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.specTex);
     gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
-    gl.viewport(0, 0, SW, SH);
+    gl.viewport(0, 0, this.sw, this.sh);
     if (!this.scene) return;
     const { p, u } = this.scene;
     gl.useProgram(p);
-    this.setCommon(u, f, SW, SH, c1, c2);
+    this.setCommon(u, f, this.sw, this.sh, c1, c2);
     gl.uniform1i(u.uScene, scene);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
